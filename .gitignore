@@ -1,0 +1,39 @@
+# Environment variables
+.env
+
+# Dependencies
+node_modules/
+client/node_modules/
+
+# Python
+python_service/venv/
+python_service/__pycache__/
+*.pyc
+*.pyo
+
+# Runtime data
+pdfs/
+translations/
+
+# Logs
+*.log
+npm-debug.log*
+python_service/*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Build outputs
+client/dist/
+client/build/
+
+# Temporary files
+project_structure.txt
+*.tmp
