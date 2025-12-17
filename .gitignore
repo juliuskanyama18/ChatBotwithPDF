@@ -37,3 +37,6 @@ client/build/
 # Temporary files
 project_structure.txt
 *.tmp
+
+nul
+

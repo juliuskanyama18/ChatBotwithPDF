@@ -9,12 +9,24 @@ const conversationSchema = new mongoose.Schema({
     documentId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Document',
-        required: true
+        default: null  // Now optional - can be workspace-level chat
+    },
+    workspaceId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Workspace',
+        default: null
     },
     title: {
         type: String,
         default: 'New Conversation'
     },
+
+    // OpenAI Assistants API fields
+    openaiThreadId: {
+        type: String,
+        default: null
+    },
+
     createdAt: {
         type: Date,
         default: Date.now

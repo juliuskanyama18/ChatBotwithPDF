@@ -24,6 +24,11 @@ const embeddingSchema = new mongoose.Schema({
     pageNumber: {
         type: Number
     },
+    chunkType: {
+        type: String,
+        enum: ['text', 'image', 'table'],
+        default: 'text'
+    },
     embedding: {
         type: [Number],
         required: true

@@ -16,8 +16,9 @@ import os
 import tempfile
 from pathlib import Path
 from loguru import logger
-from typing import Dict, Any
+from typing import Dict, Any, List
 import traceback
+from table_extractor import extract_tables_from_pdf
 
 # Configure logging
 logger.add("document_service.log", rotation="10 MB", level="INFO")
@@ -308,6 +309,62 @@ async def extract_pptx(file: UploadFile = File(...)) -> JSONResponse:
         )
 
 
+@app.post("/extract-tables")
+async def extract_tables(file: UploadFile = File(...)) -> JSONResponse:
+    """
+    TASK B: Extract tables from PDF and convert to Markdown format
+
+    This endpoint extracts all tables from a PDF document and returns them
+    as Markdown-formatted text, which is more suitable for embedding and RAG.
+
+    Returns:
+        - tables: List of extracted tables with page numbers and Markdown format
+        - total_tables: Number of tables found
+        - success: Processing status
+        - filename: Original filename
+    """
+    logger.info(f"Extracting tables from PDF: {file.filename}")
+
+    try:
+        # Read file content
+        content = await file.read()
+
+        # Extract tables using our table_extractor module
+        extracted_tables = extract_tables_from_pdf(content)
+
+        if not extracted_tables:
+            logger.info(f"No tables found in PDF: {file.filename}")
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "tables": [],
+                    "total_tables": 0,
+                    "success": True,
+                    "message": "No tables found in document",
+                    "filename": file.filename
+                }
+            )
+
+        logger.info(f"Successfully extracted {len(extracted_tables)} tables from {file.filename}")
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "tables": extracted_tables,
+                "total_tables": len(extracted_tables),
+                "success": True,
+                "filename": file.filename
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error extracting tables from {file.filename}: {str(e)}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to extract tables: {str(e)}"
+        )
+
+
 @app.post("/extract/ocr")
 async def extract_image_ocr(file: UploadFile = File(...)) -> JSONResponse:
     """
@@ -526,6 +583,97 @@ async def convert_pptx_to_pdf(file: UploadFile = File(...)):
         )
 
 
+@app.post("/extract-images")
+async def extract_images(file: UploadFile = File(...)) -> JSONResponse:
+    """
+    Extract images from PDF files and save them to temporary files
+
+    Returns:
+        - images: List of extracted images with paths and page numbers
+        - total_images: Number of images found
+        - success: Processing status
+        - filename: Original filename
+    """
+    logger.info(f"Extracting images from PDF: {file.filename}")
+
+    try:
+        # Read file content
+        content = await file.read()
+
+        # Create temporary directory for images
+        temp_dir = tempfile.mkdtemp(prefix='pdf_images_')
+        logger.info(f"Created temp directory: {temp_dir}")
+
+        extracted_images = []
+
+        # Extract images using pdfplumber
+        with pdfplumber.open(io.BytesIO(content)) as pdf:
+            for page_num, page in enumerate(pdf.pages, 1):
+                # Get images from page
+                if hasattr(page, 'images') and page.images:
+                    for img_index, img in enumerate(page.images, 1):
+                        try:
+                            # Extract image bbox
+                            x0, top, x1, bottom = img['x0'], img['top'], img['x1'], img['bottom']
+
+                            # Crop the image from page
+                            cropped_img = page.within_bbox((x0, top, x1, bottom))
+
+                            # Convert to PIL Image
+                            img_obj = cropped_img.to_image(resolution=150)
+                            pil_img = img_obj.original
+
+                            # Save image to temp file
+                            img_filename = f"page_{page_num}_img_{img_index}.png"
+                            img_path = os.path.join(temp_dir, img_filename)
+                            pil_img.save(img_path, 'PNG')
+
+                            extracted_images.append({
+                                "imagePath": img_path,
+                                "pageNumber": page_num,
+                                "imageIndex": img_index
+                            })
+
+                            logger.debug(f"Extracted image {img_index} from page {page_num}")
+
+                        except Exception as img_error:
+                            logger.warning(f"Failed to extract image {img_index} from page {page_num}: {str(img_error)}")
+                            continue
+
+        if not extracted_images:
+            logger.info(f"No images found in PDF: {file.filename}")
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "images": [],
+                    "total_images": 0,
+                    "success": True,
+                    "message": "No images found in document",
+                    "filename": file.filename
+                }
+            )
+
+        logger.info(f"Successfully extracted {len(extracted_images)} images from {file.filename}")
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "images": extracted_images,
+                "total_images": len(extracted_images),
+                "success": True,
+                "filename": file.filename,
+                "temp_dir": temp_dir
+            }
+        )
+
+    except Exception as e:
+        logger.error(f"Error extracting images from {file.filename}: {str(e)}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to extract images: {str(e)}"
+        )
+
+
 @app.post("/extract/auto")
 async def extract_auto(file: UploadFile = File(...)) -> JSONResponse:
     """
@@ -551,6 +699,193 @@ async def extract_auto(file: UploadFile = File(...)) -> JSONResponse:
         raise HTTPException(
             status_code=400,
             detail=f"Unsupported file type: {file_ext}. Supported: .pdf, .docx, .pptx, .jpg, .png, .gif, .bmp, .tiff"
+        )
+
+
+@app.post("/ocr")
+async def comprehensive_ocr(file: UploadFile = File(...)) -> JSONResponse:
+    """
+    Comprehensive OCR endpoint for managed RAG
+    Handles both images and scanned PDFs
+    Returns structured text with page markers
+
+    Supports:
+        - Images: JPG, JPEG, PNG, GIF, BMP, TIFF
+        - Scanned PDFs: Multi-page PDFs converted to images and OCR'd
+
+    Returns:
+        - text: Extracted text with page markers
+        - pageCount: Number of pages processed
+        - language: Detected language (default: 'en')
+        - confidence: Average OCR confidence
+        - success: Processing status
+    """
+    logger.info(f"Processing file with OCR: {file.filename}")
+
+    try:
+        # Check if Tesseract is available
+        if not _check_tesseract():
+            raise HTTPException(
+                status_code=503,
+                detail="Tesseract OCR is not available. Please install Tesseract-OCR."
+            )
+
+        # Read file content
+        content = await file.read()
+        file_ext = Path(file.filename).suffix.lower()
+
+        extracted_texts = []
+        total_confidence = []
+
+        # Handle images
+        if file_ext in ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.tiff', '.tif']:
+            logger.info(f"Processing image file: {file.filename}")
+
+            # Open image with PIL
+            image = Image.open(io.BytesIO(content))
+
+            # Convert to RGB if necessary
+            if image.mode not in ('RGB', 'L'):
+                image = image.convert('RGB')
+
+            # Resize if too large
+            max_dimension = 3000
+            if max(image.size) > max_dimension:
+                ratio = max_dimension / max(image.size)
+                new_size = tuple(int(dim * ratio) for dim in image.size)
+                image = image.resize(new_size, Image.Resampling.LANCZOS)
+                logger.info(f"Resized image to {new_size}")
+
+            # Perform OCR
+            text = pytesseract.image_to_string(image, lang='eng')
+            extracted_texts.append(text)
+
+            # Get confidence
+            try:
+                ocr_data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+                confidences = [conf for conf in ocr_data['conf'] if conf != -1]
+                if confidences:
+                    total_confidence.append(sum(confidences) / len(confidences))
+            except Exception:
+                pass
+
+            page_count = 1
+
+        # Handle PDFs
+        elif file_ext == '.pdf':
+            logger.info(f"Processing PDF file: {file.filename}")
+
+            # Try to extract text first (to detect if it's already text-based)
+            try:
+                with pdfplumber.open(io.BytesIO(content)) as pdf:
+                    total_text = ""
+                    for page in pdf.pages:
+                        text = page.extract_text() or ""
+                        total_text += text
+
+                    # If we got substantial text, it's not scanned
+                    avg_chars_per_page = len(total_text) / len(pdf.pages)
+                    if avg_chars_per_page > 100:
+                        logger.info(f"PDF appears to be text-based ({avg_chars_per_page:.0f} chars/page). Not using OCR.")
+                        return JSONResponse(
+                            status_code=200,
+                            content={
+                                "success": False,
+                                "needsOCR": False,
+                                "message": "PDF has extractable text, OCR not needed"
+                            }
+                        )
+            except Exception:
+                pass
+
+            # If we're here, it's a scanned PDF - convert pages to images and OCR
+            try:
+                from pdf2image import convert_from_bytes
+
+                logger.info("Converting PDF pages to images for OCR...")
+
+                # Convert PDF to images
+                images = convert_from_bytes(content, dpi=300)
+                page_count = len(images)
+
+                logger.info(f"Processing {page_count} pages with OCR...")
+
+                for page_num, image in enumerate(images, start=1):
+                    # Convert to RGB if necessary
+                    if image.mode not in ('RGB', 'L'):
+                        image = image.convert('RGB')
+
+                    # Perform OCR
+                    text = pytesseract.image_to_string(image, lang='eng')
+
+                    # Add page marker
+                    page_marker = f"\n\n--- Page {page_num} ---\n\n"
+                    extracted_texts.append(page_marker + text)
+
+                    # Get confidence
+                    try:
+                        ocr_data = pytesseract.image_to_data(image, output_type=pytesseract.Output.DICT)
+                        confidences = [conf for conf in ocr_data['conf'] if conf != -1]
+                        if confidences:
+                            total_confidence.append(sum(confidences) / len(confidences))
+                    except Exception:
+                        pass
+
+                    logger.info(f"Processed page {page_num}/{page_count}")
+
+            except ImportError:
+                raise HTTPException(
+                    status_code=503,
+                    detail="pdf2image library not available. Install with: pip install pdf2image"
+                )
+
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type for OCR: {file_ext}"
+            )
+
+        # Combine all text
+        combined_text = "".join(extracted_texts)
+
+        if not combined_text.strip():
+            logger.warning(f"No text extracted from {file.filename}")
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "text": "",
+                    "success": True,
+                    "pageCount": page_count,
+                    "warning": "No text detected",
+                    "filename": file.filename
+                }
+            )
+
+        # Calculate average confidence
+        avg_confidence = sum(total_confidence) / len(total_confidence) if total_confidence else None
+
+        logger.info(f"Successfully extracted {len(combined_text)} characters via OCR from {page_count} page(s)")
+
+        result = {
+            "text": combined_text,
+            "success": True,
+            "pageCount": page_count,
+            "language": "en",  # Could be enhanced with language detection
+            "filename": file.filename,
+            "charCount": len(combined_text),
+            "method": "ocr"
+        }
+
+        if avg_confidence is not None:
+            result["confidence"] = round(avg_confidence, 2)
+
+        return JSONResponse(status_code=200, content=result)
+
+    except Exception as e:
+        logger.error(f"Error in OCR processing {file.filename}: {str(e)}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process file with OCR: {str(e)}"
         )
 
 

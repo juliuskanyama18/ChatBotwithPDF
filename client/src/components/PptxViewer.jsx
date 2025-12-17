@@ -1,11 +1,44 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import { FileText, Download, Loader, AlertCircle } from 'lucide-react';
 import { documentsAPI } from '../services/api';
 
-export default function PptxViewer({ fileName, originalName, documentId }) {
+const PptxViewer = forwardRef(function PptxViewer({ fileName, originalName, documentId }, ref) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [slideInfo, setSlideInfo] = useState(null);
+  const contentRef = useRef(null);
+
+  // Expose scrollToPage function to parent
+  useImperativeHandle(ref, () => ({
+    scrollToPage: (slideNumber) => {
+      if (contentRef.current && slideInfo?.extractedText) {
+        // Search for slide markers in the text (e.g., "--- Slide 5 ---")
+        const slideMarkerPattern = new RegExp(`---\\s*Slide\\s+${slideNumber}\\s*---`, 'i');
+        const textContent = contentRef.current.textContent || '';
+
+        if (slideMarkerPattern.test(textContent)) {
+          // Find the position in the text
+          const markerIndex = textContent.search(slideMarkerPattern);
+
+          if (markerIndex !== -1) {
+            // Calculate approximate scroll position
+            const totalLength = textContent.length;
+            const scrollPercentage = markerIndex / totalLength;
+            const scrollTop = contentRef.current.scrollHeight * scrollPercentage;
+
+            // Scroll to that position
+            contentRef.current.parentElement.scrollTo({
+              top: scrollTop,
+              behavior: 'smooth'
+            });
+          }
+        } else {
+          // If no slide marker found, scroll to top
+          contentRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }
+    }
+  }));
 
   useEffect(() => {
     fetchSlideInfo();
@@ -107,7 +140,7 @@ export default function PptxViewer({ fileName, originalName, documentId }) {
             </h3>
             <div className="prose max-w-none">
               <div className="bg-gray-50 rounded-lg p-6 border border-gray-200">
-                <pre className="whitespace-pre-wrap font-sans text-sm text-gray-700 leading-relaxed">
+                <pre ref={contentRef} className="whitespace-pre-wrap font-sans text-sm text-gray-700 leading-relaxed">
                   {slideInfo.extractedText}
                 </pre>
               </div>
@@ -124,6 +157,7 @@ export default function PptxViewer({ fileName, originalName, documentId }) {
               <p className="text-blue-700">
                 PowerPoint presentations are displayed with extracted text content.
                 Download the file to view it with full formatting and animations in PowerPoint.
+                Click slide numbers in the chat to jump to that slide's content.
               </p>
             </div>
           </div>
@@ -131,4 +165,6 @@ export default function PptxViewer({ fileName, originalName, documentId }) {
       </div>
     </div>
   );
-}
+});
+
+export default PptxViewer;

@@ -1,11 +1,32 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react';
 import { renderAsync } from 'docx-preview';
 import { Loader, AlertCircle } from 'lucide-react';
 
-export default function DocxViewer({ fileName }) {
+const DocxViewer = forwardRef(function DocxViewer({ fileName }, ref) {
   const containerRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  // Expose scrollToPage function to parent
+  useImperativeHandle(ref, () => ({
+    scrollToPage: (page) => {
+      if (containerRef.current) {
+        // Find page breaks in the rendered DOCX
+        const pageBreaks = containerRef.current.querySelectorAll('.docx-page-break, [data-page-break]');
+
+        if (pageBreaks.length > 0 && page > 1 && page <= pageBreaks.length + 1) {
+          // Scroll to the page break element
+          const targetBreak = pageBreaks[page - 2]; // page 2 is at index 0
+          if (targetBreak) {
+            targetBreak.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        } else {
+          // If no page breaks or page 1, scroll to top
+          containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      }
+    }
+  }));
 
   useEffect(() => {
     loadAndRenderDocx();
@@ -90,4 +111,6 @@ export default function DocxViewer({ fileName }) {
       />
     </div>
   );
-}
+});
+
+export default DocxViewer;

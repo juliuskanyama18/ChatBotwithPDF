@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, forwardRef } from 'react';
 import { Image as ImageIcon, AlertCircle, Loader } from 'lucide-react';
 import PDFViewer from './PDFViewer';
 import DocxViewer from './DocxViewer';
 import PptxViewer from './PptxViewer';
 import { documentsAPI } from '../services/api';
 
-export default function UniversalDocumentViewer({ documentId, fileName, originalName }) {
+const UniversalDocumentViewer = forwardRef(function UniversalDocumentViewer({ documentId, fileName, originalName }, ref) {
   const [document, setDocument] = useState(null);
   const [loading, setLoading] = useState(true);
 
@@ -43,14 +43,14 @@ export default function UniversalDocumentViewer({ documentId, fileName, original
   const renderViewer = () => {
     const ext = getFileExtension();
 
-    // PDF files - use PDFViewer
+    // PDF files - use PDFViewer with ref
     if (ext === 'pdf') {
-      return <PDFViewer documentId={documentId} fileName={fileName} />;
+      return <PDFViewer ref={ref} documentId={documentId} fileName={fileName} />;
     }
 
     // DOCX files - use DocxViewer with original formatting
     if (ext === 'docx') {
-      return <DocxViewer fileName={fileName} originalName={originalName} />;
+      return <DocxViewer ref={ref} fileName={fileName} originalName={originalName} />;
     }
 
     // PPTX files - check if converted to PDF
@@ -59,11 +59,11 @@ export default function UniversalDocumentViewer({ documentId, fileName, original
       if (document && document.convertedPdfPath) {
         const pdfFileName = fileName.replace('.pptx', '_converted.pdf');
         console.log('📄 Displaying converted PDF for PPTX:', pdfFileName);
-        return <PDFViewer documentId={documentId} fileName={pdfFileName} />;
+        return <PDFViewer ref={ref} documentId={documentId} fileName={pdfFileName} />;
       }
 
       // Otherwise, display text content with download option
-      return <PptxViewer fileName={fileName} originalName={originalName} documentId={documentId} />;
+      return <PptxViewer ref={ref} fileName={fileName} originalName={originalName} documentId={documentId} />;
     }
 
     // Image files - show the actual image
@@ -124,4 +124,6 @@ export default function UniversalDocumentViewer({ documentId, fileName, original
   };
 
   return renderViewer();
-}
+});
+
+export default UniversalDocumentViewer;

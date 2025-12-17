@@ -1,9 +1,99 @@
 import { motion } from 'framer-motion';
 import { User, Sparkles } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import PageCitation from './PageCitation';
 
-export default function Message({ message }) {
+export default function Message({ message, onPageClick }) {
   const isUser = message.role === 'user';
+
+  // Parse message content to extract and render page citations
+  const renderContentWithCitations = (content) => {
+    // Combined pattern to match:
+    // 1. [Page 5] or [Slide 10] - citation format
+    // 2. page 31, on page 5, Page 10 shows - natural mentions
+    const combinedPattern = /(\[(Page|Slide)\s+(\d+(?:\s*,\s*\d+)*)\])|(?:(?:on|at|in|from)?\s*(?:page|slide|Page|Slide)\s+(\d+))/gi;
+
+    const parts = [];
+    let lastIndex = 0;
+    let match;
+    let key = 0;
+
+    while ((match = combinedPattern.exec(content)) !== null) {
+      // Add text before match
+      if (match.index > lastIndex) {
+        const textContent = content.substring(lastIndex, match.index);
+        parts.push(
+          <span key={`text-${key++}`}>
+            {textContent}
+          </span>
+        );
+      }
+
+      // Check if it's citation format [Page X] or natural mention
+      if (match[1]) {
+        // Citation format: [Page 5] or [Page 5, 6, 7]
+        const pageNumbers = match[3].split(/\s*,\s*/).map(num => parseInt(num.trim()));
+        pageNumbers.forEach((pageNum, idx) => {
+          parts.push(
+            <PageCitation
+              key={`citation-${key++}`}
+              pageNumber={pageNum}
+              onClick={onPageClick}
+            />
+          );
+          if (idx < pageNumbers.length - 1) {
+            parts.push(<span key={`comma-${key++}`}>, </span>);
+          }
+        });
+      } else if (match[4]) {
+        // Natural mention: "page 31" or "on page 5"
+        const pageNum = parseInt(match[4]);
+        const fullMatch = match[0];
+        const prefix = fullMatch.substring(0, fullMatch.lastIndexOf(match[4]));
+
+        // Add the prefix text (e.g., "on page " or "page ")
+        if (prefix) {
+          parts.push(
+            <span key={`prefix-${key++}`}>
+              {prefix}
+            </span>
+          );
+        }
+
+        // Add clickable page number
+        parts.push(
+          <PageCitation
+            key={`citation-${key++}`}
+            pageNumber={pageNum}
+            onClick={onPageClick}
+          />
+        );
+      }
+
+      lastIndex = match.index + match[0].length;
+    }
+
+    // Add remaining text
+    if (lastIndex < content.length) {
+      parts.push(
+        <span key={`text-${key++}`}>
+          {content.substring(lastIndex)}
+        </span>
+      );
+    }
+
+    return parts.length > 0 ? parts : content;
+  };
+
+  // Split content by paragraphs and render each with citations
+  const renderParagraphsWithCitations = (content) => {
+    const paragraphs = content.split('\n\n').filter(p => p.trim());
+
+    return paragraphs.map((paragraph, idx) => (
+      <p key={idx} className="m-0 mb-2 last:mb-0 whitespace-pre-wrap">
+        {renderContentWithCitations(paragraph)}
+      </p>
+    ));
+  };
 
   return (
     <motion.div
@@ -34,33 +124,11 @@ export default function Message({ message }) {
             {isUser ? (
               <p className="m-0 whitespace-pre-wrap">{message.content}</p>
             ) : (
-              <ReactMarkdown
-                components={{
-                  p: ({ children }) => <p className="m-0 mb-2 last:mb-0">{children}</p>,
-                  ul: ({ children }) => <ul className="m-0 mb-2 last:mb-0 pl-4">{children}</ul>,
-                  ol: ({ children }) => <ol className="m-0 mb-2 last:mb-0 pl-4">{children}</ol>,
-                  li: ({ children }) => <li className="mb-1">{children}</li>,
-                  code: ({ inline, children }) =>
-                    inline ? (
-                      <code className="bg-gray-200 px-1 py-0.5 rounded text-sm">{children}</code>
-                    ) : (
-                      <code className="block bg-gray-200 p-2 rounded text-sm overflow-x-auto">
-                        {children}
-                      </code>
-                    ),
-                }}
-              >
-                {message.content}
-              </ReactMarkdown>
+              <div>
+                {renderParagraphsWithCitations(message.content)}
+              </div>
             )}
           </div>
-
-          {/* Page Reference */}
-          {message.pageReference && (
-            <div className="mt-2 text-xs opacity-75">
-              📄 Page {message.pageReference}
-            </div>
-          )}
         </div>
       </div>
     </motion.div>

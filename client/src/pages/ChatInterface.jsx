@@ -18,6 +18,7 @@ export default function ChatInterface() {
   const [loading, setLoading] = useState(false);
   const [conversationId, setConversationId] = useState(null);
   const messagesEndRef = useRef(null);
+  const documentViewerRef = useRef(null);
 
   useEffect(() => {
     loadDocument();
@@ -30,6 +31,17 @@ export default function ChatInterface() {
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const handlePageClick = (pageNumber) => {
+    console.log(`📄 Scrolling to page ${pageNumber}`);
+    if (documentViewerRef.current && documentViewerRef.current.scrollToPage) {
+      documentViewerRef.current.scrollToPage(pageNumber);
+      toast.success(`Jumped to page ${pageNumber}`, {
+        duration: 2000,
+        position: 'top-center',
+      });
+    }
   };
 
   const loadDocument = async () => {
@@ -132,6 +144,7 @@ export default function ChatInterface() {
         {/* Document Viewer - Left Side - Always visible */}
         <div className="w-full lg:w-1/2 bg-gray-900 overflow-auto">
           <UniversalDocumentViewer
+            ref={documentViewerRef}
             documentId={documentId}
             fileName={document.fileName}
             originalName={document.originalName}
@@ -157,7 +170,7 @@ export default function ChatInterface() {
               </div>
             ) : (
               messages.map((message) => (
-                <Message key={message._id} message={message} />
+                <Message key={message._id} message={message} onPageClick={handlePageClick} />
               ))
             )}
 

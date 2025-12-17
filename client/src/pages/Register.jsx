@@ -31,7 +31,7 @@ export default function Register() {
     setLoading(false);
 
     if (result.success) {
-      navigate('/workspace');
+      navigate('/app');
     }
   };
 

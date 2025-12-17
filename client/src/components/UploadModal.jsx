@@ -76,9 +76,16 @@ export default function UploadModal({ onClose, onSuccess }) {
 
     try {
       const response = await documentsAPI.upload(formData);
-      const docType = response.data.documentType || 'Document';
-      toast.success(`${docType.toUpperCase()} uploaded successfully!`);
-      onSuccess(response.data);
+
+      // Use backend message or create a generic one
+      const message = response.data.message || 'Document uploaded successfully!';
+      toast.success(message);
+
+      // Pass the document object to parent component
+      if (response.data.document) {
+        onSuccess(response.data.document);
+      }
+
       onClose();
     } catch (error) {
       console.error('Upload error:', error);

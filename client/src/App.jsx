@@ -3,8 +3,7 @@ import { Toaster } from 'react-hot-toast';
 import { AuthProvider, useAuth } from './hooks/useAuth';
 import Login from './pages/Login';
 import Register from './pages/Register';
-import Workspace from './pages/Workspace';
-import ChatInterface from './pages/ChatInterface';
+import UnifiedChat from './pages/UnifiedChat';
 import Landing from './pages/Landing';
 
 // Protected Route Component
@@ -34,7 +33,7 @@ const PublicRoute = ({ children }) => {
     );
   }
 
-  return !user ? children : <Navigate to="/workspace" />;
+  return !user ? children : <Navigate to="/app" />;
 };
 
 function AppRoutes() {
@@ -65,21 +64,16 @@ function AppRoutes() {
         }
       />
       <Route
-        path="/workspace"
+        path="/app"
         element={
           <ProtectedRoute>
-            <Workspace />
+            <UnifiedChat />
           </ProtectedRoute>
         }
       />
-      <Route
-        path="/chat/:documentId"
-        element={
-          <ProtectedRoute>
-            <ChatInterface />
-          </ProtectedRoute>
-        }
-      />
+      {/* Legacy routes - redirect to new unified app */}
+      <Route path="/workspace" element={<Navigate to="/app" replace />} />
+      <Route path="/chat/:documentId" element={<Navigate to="/app" replace />} />
     </Routes>
   );
 }
