@@ -3,7 +3,6 @@ import Document from '../models/Document.js';
 import { chunkText, cleanText } from '../utils/textProcessing.js';
 import { generateEmbeddingsBatch, storeEmbeddings } from '../utils/embeddings.js';
 import { extractAndCaptionImages, cleanupImageFiles } from '../utils/imageExtractor.js';
-import { extractTablesFromPDF } from '../utils/tableExtractor.js';
 
 /**
  * Generate and store embeddings for a document
@@ -76,37 +75,14 @@ export async function generateDocumentEmbeddings(documentId, userId, text) {
             }
         }
 
-        // TASK B: Extract tables from PDF (if PDF)
-        let tableCaptions = [];
-
-        if (documentType === 'pdf' && document.filePath) {
-            try {
-                const extractedTables = await extractTablesFromPDF(document.filePath, documentType);
-
-                if (extractedTables.length > 0) {
-                    // Add table markdown as separate chunks with special marker
-                    tableCaptions = extractedTables.map((table, idx) => ({
-                        text: `[TABLE - Page ${table.pageNumber}]:\n${table.tableMarkdown}`,
-                        pageNumber: table.pageNumber,
-                        chunkIndex: chunksWithMetadata.length + imageCaptions.length + idx
-                    }));
-
-                    console.log(`   📊 Added ${tableCaptions.length} table chunks`);
-                }
-            } catch (error) {
-                console.error('⚠️  Error processing tables:', error.message);
-                // Continue without table chunks if there's an error
-            }
-        }
-
-        // Combine text chunks, image captions, and table chunks
-        const allChunks = [...chunksWithMetadata, ...imageCaptions, ...tableCaptions];
+        // Combine text chunks and image captions
+        const allChunks = [...chunksWithMetadata, ...imageCaptions];
 
         // Generate embeddings for all chunks (text + image captions)
         const textArray = allChunks.map(c => c.text);
         const embeddings = await generateEmbeddingsBatch(textArray);
 
-        console.log(`Generated ${embeddings.length} embeddings for document ${documentId} (${chunksWithMetadata.length} text + ${imageCaptions.length} images + ${tableCaptions.length} tables)`);
+        console.log(`Generated ${embeddings.length} embeddings for document ${documentId} (${chunksWithMetadata.length} text + ${imageCaptions.length} images)`);
 
         // Store embeddings in database with document type
         await storeEmbeddings(documentId, userId, allChunks, embeddings, documentType);

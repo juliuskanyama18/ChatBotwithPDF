@@ -296,7 +296,10 @@ export async function deleteEmbeddings(documentId) {
  */
 export function buildContextFromChunks(chunks) {
     if (!chunks || chunks.length === 0) {
-        return '[No relevant context found]';
+        return {
+            contextString: '[No relevant context found]',
+            selectedChunks: []
+        };
     }
 
     // Sort all chunks by similarity (highest first)
@@ -329,7 +332,10 @@ export function buildContextFromChunks(chunks) {
     // Log selection summary
     console.log(`   📝 Built context: ${selectedText.length} text + ${selectedTables.length} table + ${selectedImages.length} image chunks`);
 
-    return contextString;
+    return {
+        contextString,
+        selectedChunks: allSelected
+    };
 }
 
 /**

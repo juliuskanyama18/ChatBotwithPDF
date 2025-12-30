@@ -31,6 +31,7 @@ import TypingIndicator from '../components/TypingIndicator';
 import UploadModal from '../components/UploadModal';
 
 export default function UnifiedChat() {
+  const didLoadFolders = useRef(false);
   const { user, logout } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const documentId = searchParams.get('doc');
@@ -56,11 +57,18 @@ export default function UnifiedChat() {
   const [renamingDocId, setRenamingDocId] = useState(null);
   const [folderModalOpen, setFolderModalOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
-  const [moveToFolderModalOpen, setMoveToFolderModalOpen] = useState(false);
+  const [moveToFolderModalOpen, setMoveToFolderModal] = useState(false);
   const [movingDocId, setMovingDocId] = useState(null);
   const [draggedDocId, setDraggedDocId] = useState(null);
   const [dragOverFolderId, setDragOverFolderId] = useState(null);
   const [expandedFolders, setExpandedFolders] = useState({});
+  const [folderContextMenu, setFolderContextMenu] = useState(null);
+  const [renamingFolderId, setRenamingFolderId] = useState(null);
+  const [renamingFolderValue, setRenamingFolderValue] = useState('');
+  const [showAllChats, setShowAllChats] = useState(false);
+
+  // VIEW MODE STATE
+  const [viewMode, setViewMode] = useState('both'); // 'both' | 'document' | 'chat'
 
   // Resizable panel widths
   const [sidebarWidth, setSidebarWidth] = useState(280);
@@ -76,14 +84,15 @@ export default function UnifiedChat() {
   // Load documents and folders on mount
   useEffect(() => {
     loadDocuments();
-    loadFoldersFromStorage();
+    if (!didLoadFolders.current) {
+      loadFoldersFromStorage();
+      didLoadFolders.current = true;
+    }
   }, []);
 
   // Save folders to localStorage whenever they change
   useEffect(() => {
-    if (folders.length > 0) {
-      localStorage.setItem('chatpdf_folders', JSON.stringify(folders));
-    }
+    localStorage.setItem('chatpdf_folders', JSON.stringify(folders));
   }, [folders]);
 
   // Load conversation when document changes
@@ -187,8 +196,11 @@ export default function UnifiedChat() {
       const storedFolders = localStorage.getItem('chatpdf_folders');
       if (storedFolders) {
         setFolders(JSON.parse(storedFolders));
+      } else {
+        setFolders([]);
       }
     } catch (error) {
+      setFolders([]);
       console.error('Error loading folders from storage:', error);
     }
   };
@@ -255,6 +267,8 @@ export default function UnifiedChat() {
         content: response.data.reply,
         _id: (Date.now() + 1).toString(),
         pageReference: response.data.relevantPages?.[0],
+        relevantPages: response.data.relevantPages || [],
+        relevantChunks: response.data.relevantChunks || []
       };
 
       setMessages((prev) => [...prev, aiMessage]);
@@ -262,6 +276,8 @@ export default function UnifiedChat() {
       if (!conversationId) {
         setConversationId(response.data.conversationId);
       }
+
+      // Do not auto-scroll or auto-highlight; wait for user to click page citations
     } catch (error) {
       console.error('Error sending message:', error);
       toast.error('Failed to send message');
@@ -271,9 +287,27 @@ export default function UnifiedChat() {
     }
   };
 
-  const handlePageClick = (pageNumber) => {
+  const handlePageClick = (pageNumber, message = null) => {
     if (documentViewerRef.current && documentViewerRef.current.scrollToPage) {
       documentViewerRef.current.scrollToPage(pageNumber);
+
+      // If the message contains chunk-level info, highlight those chunks for this page
+      const chunks = message?.relevantChunks || [];
+      const chunksForPage = chunks.filter(c => Number(c.pageNumber) === Number(pageNumber));
+
+      if (chunksForPage.length > 0 && documentViewerRef.current.highlightChunks) {
+        try {
+          documentViewerRef.current.highlightChunks(chunksForPage);
+        } catch (err) {
+          // fallback to highlight page only
+          if (documentViewerRef.current.highlightPages) {
+            documentViewerRef.current.highlightPages([pageNumber]);
+          }
+        }
+      } else if (documentViewerRef.current.highlightPages) {
+        documentViewerRef.current.highlightPages([pageNumber]);
+      }
+
       toast.success(`Jumped to page ${pageNumber}`, {
         duration: 2000,
         position: 'top-center',
@@ -411,7 +445,7 @@ export default function UnifiedChat() {
       return;
     }
     setMovingDocId(docId);
-    setMoveToFolderModalOpen(true);
+    setMoveToFolderModal(true);
     setActiveContextMenu(null);
   };
 
@@ -467,7 +501,7 @@ export default function UnifiedChat() {
       ));
 
       toast.success('Document moved to folder successfully');
-      setMoveToFolderModalOpen(false);
+      setMoveToFolderModal(false);
       setMovingDocId(null);
     } catch (error) {
       console.error('Error moving to folder:', error);
@@ -484,7 +518,11 @@ export default function UnifiedChat() {
       documents: [],
     };
 
-    setFolders([...folders, newFolder]);
+    setFolders(prevFolders => {
+      const updatedFolders = [...prevFolders, newFolder];
+      // localStorage will be updated by useEffect
+      return updatedFolders;
+    });
     toast.success('Folder created successfully');
     setFolderModalOpen(false);
     setNewFolderName('');
@@ -641,6 +679,43 @@ export default function UnifiedChat() {
       ...prev,
       [folderId]: !prev[folderId]
     }));
+  };
+
+  const handleRenameFolder = (folderId, folderName) => {
+    setRenamingFolderId(folderId);
+    setRenamingFolderValue(folderName);
+    setFolderContextMenu(null);
+  };
+
+  const handleSaveRenameFolder = () => {
+    if (!renamingFolderValue.trim()) {
+      toast.error('Folder name cannot be empty');
+      return;
+    }
+
+    setFolders(folders.map(folder =>
+      folder.id === renamingFolderId
+        ? { ...folder, name: renamingFolderValue }
+        : folder
+    ));
+
+    toast.success('Folder renamed successfully');
+    setRenamingFolderId(null);
+    setRenamingFolderValue('');
+  };
+
+  const handleDeleteFolder = (folderId) => {
+    const folder = folders.find(f => f.id === folderId);
+    if (!folder) return;
+
+    if (window.confirm(`Are you sure you want to delete the folder "${folder.name}"? Documents will not be deleted, only removed from the folder.`)) {
+      const updatedFolders = folders.filter(f => f.id !== folderId);
+      setFolders(updatedFolders);
+      // Explicitly save to localStorage
+      localStorage.setItem('chatpdf_folders', JSON.stringify(updatedFolders));
+      setFolderContextMenu(null);
+      toast.success('Folder deleted successfully');
+    }
   };
 
   const categorizedDocs = organizeDocumentsByDate(documents);
@@ -924,6 +999,31 @@ export default function UnifiedChat() {
 
         {/* Right Section - User Profile */}
         <div className="flex items-center space-x-3">
+          {/* VIEW MODE BUTTONS */}
+          <div className="flex items-center space-x-2 mr-4">
+            <button
+              className={`inline-flex items-center justify-center flex-shrink-0 transition-all duration-200 focus-visible:outline-none disabled:pointer-events-none relative overflow-hidden cursor-pointer text-text-main size-8 rounded-md ${viewMode === 'document' ? 'bg-primary-100 border border-primary-400' : ''}`}
+              title="Document Only"
+              onClick={() => setViewMode('document')}
+            >
+              <FileText className="w-5 h-5" />
+            </button>
+            <button
+              className={`inline-flex items-center justify-center flex-shrink-0 transition-all duration-200 focus-visible:outline-none disabled:pointer-events-none relative overflow-hidden cursor-pointer text-text-main size-8 rounded-md ${viewMode === 'both' ? 'bg-primary-100 border border-primary-400' : ''}`}
+              title="Document and Chat"
+              onClick={() => setViewMode('both')}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="w-5 h-5"><path d="M8 19H5c-1 0-2-1-2-2V7c0-1 1-2 2-2h3"></path><path d="M16 5h3c1 0 2 1 2 2v10c0 1-1 2-2 2h-3"></path><line x1="12" x2="12" y1="4" y2="20"></line></svg>
+            </button>
+            <button
+              className={`inline-flex items-center justify-center flex-shrink-0 transition-all duration-200 focus-visible:outline-none disabled:pointer-events-none relative overflow-hidden cursor-pointer text-text-main size-8 rounded-md ${viewMode === 'chat' ? 'bg-primary-100 border border-primary-400' : ''}`}
+              title="Chat Only"
+              onClick={() => setViewMode('chat')}
+            >
+              <MessageSquare className="w-5 h-5" />
+            </button>
+          </div>
+
           <div className="relative">
             <button
               onClick={() => setProfileMenuOpen(!profileMenuOpen)}
@@ -982,20 +1082,27 @@ export default function UnifiedChat() {
                   <>
                     {/* Chats Section */}
                     <div className="mb-6">
-                      <div className="flex items-center justify-between px-2 py-1 mb-2">
+                      <button
+                        onClick={() => setShowAllChats(!showAllChats)}
+                        className="w-full flex items-center justify-between px-2 py-1 mb-2 hover:bg-gray-100 rounded transition-colors"
+                      >
                         <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider flex items-center space-x-1">
                           <MessageSquare className="w-3 h-3" />
                           <span>Chats</span>
                         </h3>
-                        {documents.length > 5 && (
-                          <button
-                            onClick={() => setAllChatsModalOpen(true)}
-                            className="text-xs text-primary-600 hover:text-primary-700 font-medium"
-                          >
-                            All
-                          </button>
-                        )}
-                      </div>
+                        <div className="flex items-center space-x-2">
+                          {documents.length > 0 && (
+                            <span className="text-xs bg-gray-200 text-gray-700 px-2 py-0.5 rounded-full">
+                              {documents.length}
+                            </span>
+                          )}
+                          <ChevronDown
+                            className={`w-4 h-4 text-gray-400 transition-transform ${
+                              showAllChats ? 'transform rotate-180' : ''
+                            }`}
+                          />
+                        </div>
+                      </button>
 
                       {documents.length === 0 ? (
                         <div className="text-center py-8 px-4">
@@ -1007,35 +1114,80 @@ export default function UnifiedChat() {
                         </div>
                       ) : (
                         <div className="space-y-1">
-                          {/* Today */}
-                          {categorizedDocs.today.length > 0 && (
+                          {showAllChats ? (
+                            // Show all documents
                             <>
-                              <p className="text-xs text-gray-500 px-2 py-1">Today</p>
-                              {categorizedDocs.today.slice(0, 5).map((doc) => (
-                                <ChatItem key={doc._id} doc={doc} />
-                              ))}
-                            </>
-                          )}
+                              {/* Today */}
+                              {categorizedDocs.today.length > 0 && (
+                                <>
+                                  <p className="text-xs text-gray-500 px-2 py-1">Today</p>
+                                  {categorizedDocs.today.map((doc) => (
+                                    <ChatItem key={doc._id} doc={doc} />
+                                  ))}
+                                </>
+                              )}
 
-                          {/* Yesterday */}
-                          {categorizedDocs.yesterday.length > 0 && (
-                            <>
-                              <p className="text-xs text-gray-500 px-2 py-1 mt-2">
-                                Yesterday
-                              </p>
-                              {categorizedDocs.yesterday.slice(0, 3).map((doc) => (
-                                <ChatItem key={doc._id} doc={doc} />
-                              ))}
-                            </>
-                          )}
+                              {/* Yesterday */}
+                              {categorizedDocs.yesterday.length > 0 && (
+                                <>
+                                  <p className="text-xs text-gray-500 px-2 py-1 mt-2">
+                                    Yesterday
+                                  </p>
+                                  {categorizedDocs.yesterday.map((doc) => (
+                                    <ChatItem key={doc._id} doc={doc} />
+                                  ))}
+                                </>
+                              )}
 
-                          {/* Older */}
-                          {categorizedDocs.older.length > 0 && (
+                              {/* Older */}
+                              {categorizedDocs.older.length > 0 && (
+                                <>
+                                  <p className="text-xs text-gray-500 px-2 py-1 mt-2">Older</p>
+                                  {categorizedDocs.older.map((doc) => (
+                                    <ChatItem key={doc._id} doc={doc} />
+                                  ))}
+                                </>
+                              )}
+                            </>
+                          ) : (
+                            // Show limited documents (original behavior)
                             <>
-                              <p className="text-xs text-gray-500 px-2 py-1 mt-2">Older</p>
-                              {categorizedDocs.older.slice(0, 2).map((doc) => (
-                                <ChatItem key={doc._id} doc={doc} />
-                              ))}
+                              {/* Today */}
+                              {categorizedDocs.today.length > 0 && (
+                                <>
+                                  <p className="text-xs text-gray-500 px-2 py-1">Today</p>
+                                  {categorizedDocs.today.slice(0, 5).map((doc) => (
+                                    <ChatItem key={doc._id} doc={doc} />
+                                  ))}
+                                </>
+                              )}
+
+                              {/* Yesterday */}
+                              {categorizedDocs.yesterday.length > 0 && (
+                                <>
+                                  <p className="text-xs text-gray-500 px-2 py-1 mt-2">
+                                    Yesterday
+                                  </p>
+                                  {categorizedDocs.yesterday.slice(0, 3).map((doc) => (
+                                    <ChatItem key={doc._id} doc={doc} />
+                                  ))}
+                                </>
+                              )}
+
+                              {/* Older */}
+                              {categorizedDocs.older.length > 0 && (
+                                <>
+                                  <p className="text-xs text-gray-500 px-2 py-1 mt-2">Older</p>
+                                  {categorizedDocs.older.slice(0, 2).map((doc) => (
+                                    <ChatItem key={doc._id} doc={doc} />
+                                  ))}
+                                  {categorizedDocs.older.length > 2 && !showAllChats && (
+                                    <p className="text-xs text-gray-500 px-2 py-1">
+                                      +{categorizedDocs.older.length - 2} more
+                                    </p>
+                                  )}
+                                </>
+                              )}
                             </>
                           )}
                         </div>
@@ -1078,18 +1230,79 @@ export default function UnifiedChat() {
                                 }`}
                               >
                                 {/* Folder Header */}
-                                <button
-                                  onClick={() => toggleFolder(folder.id)}
-                                  className="w-full flex items-center space-x-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-lg transition-colors"
-                                >
-                                  {isExpanded ? (
-                                    <ChevronDown className="w-4 h-4 text-gray-400" />
-                                  ) : (
-                                    <ChevronRight className="w-4 h-4 text-gray-400" />
-                                  )}
-                                  <Folder className="w-4 h-4 text-gray-400" />
-                                  <span className="flex-1 truncate text-left">{folder.name}</span>
-                                </button>
+                                <div className="flex items-center space-x-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-lg transition-colors group">
+                                  <button
+                                    onClick={() => toggleFolder(folder.id)}
+                                    className="flex items-center space-x-2 flex-1"
+                                  >
+                                    {isExpanded ? (
+                                      <ChevronDown className="w-4 h-4 text-gray-400" />
+                                    ) : (
+                                      <ChevronRight className="w-4 h-4 text-gray-400" />
+                                    )}
+                                    <Folder className="w-4 h-4 text-gray-400" />
+                                    {renamingFolderId === folder.id ? (
+                                      <input
+                                        type="text"
+                                        value={renamingFolderValue}
+                                        onChange={(e) => setRenamingFolderValue(e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') {
+                                            handleSaveRenameFolder();
+                                          } else if (e.key === 'Escape') {
+                                            setRenamingFolderId(null);
+                                            setRenamingFolderValue('');
+                                          }
+                                        }}
+                                        onBlur={handleSaveRenameFolder}
+                                        autoFocus
+                                        className="flex-1 px-2 py-1 text-sm rounded border border-primary-400 focus:outline-none focus:ring-1 focus:ring-primary-500"
+                                        onClick={(e) => e.stopPropagation()}
+                                      />
+                                    ) : (
+                                      <span className="flex-1 truncate text-left">{folder.name}</span>
+                                    )}
+                                  </button>
+
+                                  {/* Three Dots Menu */}
+                                  <div className="relative">
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        setFolderContextMenu(
+                                          folderContextMenu === folder.id ? null : folder.id
+                                        );
+                                      }}
+                                      className="p-1 hover:bg-gray-200 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                                      title="Folder options"
+                                    >
+                                      <MoreVertical className="w-4 h-4 text-gray-500" />
+                                    </button>
+
+                                    {/* Dropdown Menu */}
+                                    {folderContextMenu === folder.id && (
+                                      <div
+                                        className="absolute right-0 mt-1 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-50"
+                                        onClick={(e) => e.stopPropagation()}
+                                      >
+                                        <button
+                                          onClick={() => handleRenameFolder(folder.id, folder.name)}
+                                          className="w-full flex items-center space-x-2 px-4 py-2 hover:bg-gray-50 text-gray-700 text-sm"
+                                        >
+                                          <Edit2 className="w-4 h-4" />
+                                          <span>Rename folder</span>
+                                        </button>
+                                        <button
+                                          onClick={() => handleDeleteFolder(folder.id)}
+                                          className="w-full flex items-center space-x-2 px-4 py-2 hover:bg-red-50 text-red-700 text-sm"
+                                        >
+                                          <Trash2 className="w-4 h-4" />
+                                          <span>Delete folder</span>
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
 
                                 {/* Folder Contents */}
                                 {isExpanded && folderDocs.length > 0 && (
@@ -1120,53 +1333,9 @@ export default function UnifiedChat() {
         )}
 
         {/* Main Content */}
-        {!currentDocument ? (
-          // Upload Zone
-          <div
-            className="flex-1 flex items-center justify-center p-8 overflow-y-auto"
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-          >
-            <div
-              className={`max-w-md w-full text-center p-12 border-2 border-dashed rounded-2xl transition-all ${
-                dragging
-                  ? 'border-primary-500 bg-primary-50'
-                  : 'border-gray-300 bg-white'
-              }`}
-            >
-              <Upload
-                className={`w-16 h-16 mx-auto mb-4 ${
-                  dragging ? 'text-primary-600' : 'text-gray-400'
-                }`}
-              />
-              <h2 className="text-2xl font-bold text-gray-900 mb-2">
-                Upload Your Document
-              </h2>
-              <p className="text-gray-600 mb-6">
-                Drag and drop your PDF, DOCX, or PPTX file here, or click to
-                browse
-              </p>
-              <button
-                onClick={() => setUploadModalOpen(true)}
-                className="btn-primary inline-flex items-center space-x-2"
-              >
-                <Upload className="w-5 h-5" />
-                <span>Choose File</span>
-              </button>
-              <p className="text-xs text-gray-500 mt-4">
-                Supports PDF, DOCX, and PPTX files up to 50MB
-              </p>
-            </div>
-          </div>
-        ) : (
-          // Split View: Document + Chat
-          <div className="flex-1 flex overflow-hidden">
-            {/* Document Viewer - Scrollable */}
-            <div
-              style={{ width: `${documentWidth}%` }}
-              className="bg-gray-900 overflow-y-auto overflow-x-hidden"
-            >
+        <div className={`flex-1 overflow-hidden flex relative ${viewMode === 'both' ? 'flex-row' : 'flex-col'}`}> 
+          {viewMode === 'document' && currentDocument && (
+            <div className="flex-1 bg-gray-900 overflow-y-auto overflow-x-hidden">
               <UniversalDocumentViewer
                 ref={documentViewerRef}
                 documentId={currentDocument._id}
@@ -1174,19 +1343,9 @@ export default function UnifiedChat() {
                 originalName={currentDocument.originalName}
               />
             </div>
-
-            {/* Document/Chat Resize Handle */}
-            <div
-              onMouseDown={() => setIsResizingDocument(true)}
-              className="w-1 bg-gray-200 hover:bg-primary-400 cursor-col-resize transition-colors flex-shrink-0"
-              style={{ cursor: 'col-resize' }}
-            />
-
-            {/* Chat - Scrollable */}
-            <div
-              style={{ width: `${100 - documentWidth}%` }}
-              className="flex flex-col bg-white"
-            >
+          )}
+          {viewMode === 'chat' && (
+            <div className="flex-1 flex flex-col bg-white">
               {/* Messages Area - Scrollable */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {messages.length === 0 ? (
@@ -1221,11 +1380,9 @@ export default function UnifiedChat() {
                     />
                   ))
                 )}
-
                 {loading && <TypingIndicator />}
                 <div ref={messagesEndRef} />
               </div>
-
               {/* Input Area - Fixed */}
               <div className="border-t border-gray-200 p-4 bg-white">
                 <form
@@ -1259,185 +1416,268 @@ export default function UnifiedChat() {
                 </p>
               </div>
             </div>
+          )}
+          {viewMode === 'both' && currentDocument && (
+            <>
+              <div className="flex-1 bg-gray-900 overflow-y-auto overflow-x-hidden">
+                <UniversalDocumentViewer
+                  ref={documentViewerRef}
+                  documentId={currentDocument._id}
+                  fileName={currentDocument.fileName}
+                  originalName={currentDocument.originalName}
+                />
+              </div>
+              <div className="flex-1 flex flex-col bg-white">
+                {/* Messages Area - Scrollable */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  {messages.length === 0 ? (
+                    <div className="flex items-center justify-center h-full text-center px-4">
+                      <div>
+                        <MessageSquare className="w-12 h-12 text-primary-600 mx-auto mb-4" />
+                        <h3 className="text-lg font-semibold text-gray-900 mb-2">
+                          Start a Conversation
+                        </h3>
+                        <p className="text-gray-600 mb-4">
+                          Ask me anything about this document. I'll provide
+                          accurate answers with page references.
+                        </p>
+                        <div className="text-left inline-block">
+                          <p className="text-sm text-gray-600 font-medium mb-2">
+                            Try asking:
+                          </p>
+                          <ul className="text-sm text-gray-600 space-y-1">
+                            <li>• "What is this document about?"</li>
+                            <li>• "Summarize the main points"</li>
+                            <li>• "Find information about..."</li>
+                          </ul>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    messages.map((message) => (
+                      <Message
+                        key={message._id}
+                        message={message}
+                        onPageClick={handlePageClick}
+                      />
+                    ))
+                  )}
+                  {loading && <TypingIndicator />}
+                  <div ref={messagesEndRef} />
+                </div>
+                {/* Input Area - Fixed */}
+                <div className="border-t border-gray-200 p-4 bg-white">
+                  <form
+                    onSubmit={handleSendMessage}
+                    className="flex items-end space-x-2"
+                  >
+                    <textarea
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && !e.shiftKey) {
+                          e.preventDefault();
+                          handleSendMessage(e);
+                        }
+                      }}
+                      placeholder="Ask a question about this document..."
+                      rows={1}
+                      className="flex-1 resize-none input-field max-h-32"
+                      style={{ minHeight: '42px' }}
+                    />
+                    <button
+                      type="submit"
+                      disabled={!input.trim() || loading}
+                      className="btn-primary p-3"
+                    >
+                      <Send className="w-5 h-5" />
+                    </button>
+                  </form>
+                  <p className="text-xs text-gray-500 mt-2 text-center">
+                    Press Enter to send, Shift+Enter for new line
+                  </p>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* All Chats Modal */}
+        {allChatsModalOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
+              <div className="flex items-center justify-between p-4 border-b border-gray-200">
+                <h2 className="text-lg font-semibold text-gray-900">All chats</h2>
+                <button
+                  onClick={() => setAllChatsModalOpen(false)}
+                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  <X className="w-5 h-5 text-gray-600" />
+                </button>
+              </div>
+              <div className="flex-1 overflow-y-auto p-4">
+                {/* Today */}
+                {categorizedDocs.today.length > 0 && (
+                  <>
+                    <p className="text-sm font-semibold text-gray-700 mb-2">Today</p>
+                    <div className="space-y-1 mb-4">
+                      {categorizedDocs.today.map((doc) => (
+                        <ChatItem key={doc._id} doc={doc} />
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {/* Yesterday */}
+                {categorizedDocs.yesterday.length > 0 && (
+                  <>
+                    <p className="text-sm font-semibold text-gray-700 mb-2">Yesterday</p>
+                    <div className="space-y-1 mb-4">
+                      {categorizedDocs.yesterday.map((doc) => (
+                        <ChatItem key={doc._id} doc={doc} />
+                      ))}
+                    </div>
+                  </>
+                )}
+
+                {/* Older */}
+                {categorizedDocs.older.length > 0 && (
+                  <>
+                    <p className="text-sm font-semibold text-gray-700 mb-2">Older</p>
+                    <div className="space-y-1">
+                      {categorizedDocs.older.map((doc) => (
+                        <ChatItem key={doc._id} doc={doc} />
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
         )}
-      </div>
 
-      {/* All Chats Modal */}
-      {allChatsModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col">
-            <div className="flex items-center justify-between p-4 border-b border-gray-200">
-              <h2 className="text-lg font-semibold text-gray-900">All chats</h2>
-              <button
-                onClick={() => setAllChatsModalOpen(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-              >
-                <X className="w-5 h-5 text-gray-600" />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-4">
-              {/* Today */}
-              {categorizedDocs.today.length > 0 && (
-                <>
-                  <p className="text-sm font-semibold text-gray-700 mb-2">Today</p>
-                  <div className="space-y-1 mb-4">
-                    {categorizedDocs.today.map((doc) => (
-                      <ChatItem key={doc._id} doc={doc} />
-                    ))}
-                  </div>
-                </>
-              )}
-
-              {/* Yesterday */}
-              {categorizedDocs.yesterday.length > 0 && (
-                <>
-                  <p className="text-sm font-semibold text-gray-700 mb-2">Yesterday</p>
-                  <div className="space-y-1 mb-4">
-                    {categorizedDocs.yesterday.map((doc) => (
-                      <ChatItem key={doc._id} doc={doc} />
-                    ))}
-                  </div>
-                </>
-              )}
-
-              {/* Older */}
-              {categorizedDocs.older.length > 0 && (
-                <>
-                  <p className="text-sm font-semibold text-gray-700 mb-2">Older</p>
-                  <div className="space-y-1">
-                    {categorizedDocs.older.map((doc) => (
-                      <ChatItem key={doc._id} doc={doc} />
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Rename Modal */}
-      {renameModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Rename chat</h2>
-            <input
-              type="text"
-              value={renameValue}
-              onChange={(e) => setRenameValue(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleRenameSubmit();
-                if (e.key === 'Escape') {
-                  setRenameModalOpen(false);
-                  setRenameValue('');
-                }
-              }}
-              className="input-field w-full mb-4"
-              placeholder="Enter new chat name"
-              autoFocus
-            />
-            <div className="flex items-center justify-end space-x-2">
-              <button
-                onClick={() => {
-                  setRenameModalOpen(false);
-                  setRenameValue('');
+        {/* Rename Modal */}
+        {renameModalOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">Rename chat</h2>
+              <input
+                type="text"
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleRenameSubmit();
+                  if (e.key === 'Escape') {
+                    setRenameModalOpen(false);
+                    setRenameValue('');
+                  }
                 }}
-                className="btn-secondary"
-              >
-                Cancel
-              </button>
-              <button onClick={handleRenameSubmit} className="btn-primary">
-                Rename
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* New Folder Modal */}
-      {folderModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Create new folder</h2>
-            <input
-              type="text"
-              value={newFolderName}
-              onChange={(e) => setNewFolderName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleCreateFolder();
-                if (e.key === 'Escape') {
-                  setFolderModalOpen(false);
-                  setNewFolderName('');
-                }
-              }}
-              className="input-field w-full mb-4"
-              placeholder="Enter folder name"
-              autoFocus
-            />
-            <div className="flex items-center justify-end space-x-2">
-              <button
-                onClick={() => {
-                  setFolderModalOpen(false);
-                  setNewFolderName('');
-                }}
-                className="btn-secondary"
-              >
-                Cancel
-              </button>
-              <button onClick={handleCreateFolder} className="btn-primary">
-                Create
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Move to Folder Modal */}
-      {moveToFolderModalOpen && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-            <h2 className="text-lg font-semibold text-gray-900 mb-4">Move to folder</h2>
-            {folders.length === 0 ? (
-              <p className="text-gray-500 text-sm mb-4">No folders available. Create a folder first.</p>
-            ) : (
-              <div className="space-y-2 mb-4 max-h-64 overflow-y-auto">
-                {folders.map((folder) => (
-                  <button
-                    key={folder.id}
-                    onClick={() => handleMoveToFolderSubmit(folder.id)}
-                    className="w-full flex items-center space-x-3 px-4 py-3 text-left rounded-lg border border-gray-200 hover:border-primary-400 hover:bg-primary-50 transition-colors"
-                  >
-                    <Folder className="w-5 h-5 text-gray-400" />
-                    <div className="flex-1">
-                      <div className="font-medium text-gray-900">{folder.name}</div>
-                    </div>
-                  </button>
-                ))}
+                className="input-field w-full mb-4"
+                placeholder="Enter new chat name"
+                autoFocus
+              />
+              <div className="flex items-center justify-end space-x-2">
+                <button
+                  onClick={() => {
+                    setRenameModalOpen(false);
+                    setRenameValue('');
+                  }}
+                  className="btn-secondary"
+                >
+                  Cancel
+                </button>
+                <button onClick={handleRenameSubmit} className="btn-primary">
+                  Rename
+                </button>
               </div>
-            )}
-            <div className="flex items-center justify-end space-x-2">
-              <button
-                onClick={() => {
-                  setMoveToFolderModalOpen(false);
-                  setMovingDocId(null);
-                }}
-                className="btn-secondary"
-              >
-                Cancel
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
-      {/* Upload Modal */}
-      {uploadModalOpen && (
-        <UploadModal
-          onClose={() => setUploadModalOpen(false)}
-          onSuccess={handleUploadSuccess}
-        />
-      )}
+        {/* New Folder Modal */}
+        {folderModalOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">Create new folder</h2>
+              <input
+                type="text"
+                value={newFolderName}
+                onChange={(e) => setNewFolderName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleCreateFolder();
+                  if (e.key === 'Escape') {
+                    setFolderModalOpen(false);
+                    setNewFolderName('');
+                  }
+                }}
+                className="input-field w-full mb-4"
+                placeholder="Enter folder name"
+                autoFocus
+              />
+              <div className="flex items-center justify-end space-x-2">
+                <button
+                  onClick={() => {
+                    setFolderModalOpen(false);
+                    setNewFolderName('');
+                  }}
+                  className="btn-secondary"
+                >
+                  Cancel
+                </button>
+                <button onClick={handleCreateFolder} className="btn-primary">
+                  Create
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Move to Folder Modal */}
+        {moveToFolderModalOpen && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg shadow-xl max-w-md w-full p-6">
+              <h2 className="text-lg font-semibold text-gray-900 mb-4">Move to folder</h2>
+              {folders.length === 0 ? (
+                <p className="text-gray-500 text-sm mb-4">No folders available. Create a folder first.</p>
+              ) : (
+                <div className="space-y-2 mb-4 max-h-64 overflow-y-auto">
+                  {folders.map((folder) => (
+                    <button
+                      key={folder.id}
+                      onClick={() => handleMoveToFolderSubmit(folder.id)}
+                      className="w-full flex items-center space-x-3 px-4 py-3 text-left rounded-lg border border-gray-200 hover:border-primary-400 hover:bg-primary-50 transition-colors"
+                    >
+                      <Folder className="w-5 h-5 text-gray-400" />
+                      <div className="flex-1">
+                        <div className="font-medium text-gray-900">{folder.name}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <div className="flex items-center justify-end space-x-2">
+                <button
+                  onClick={() => {
+                    setMoveToFolderModal(false);
+                    setMovingDocId(null);
+                  }}
+                  className="btn-secondary"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Upload Modal */}
+        {uploadModalOpen && (
+          <UploadModal
+            onClose={() => setUploadModalOpen(false)}
+            onSuccess={handleUploadSuccess}
+          />
+        )}
+      </div>
     </div>
   );
 }

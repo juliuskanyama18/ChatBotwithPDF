@@ -62,27 +62,4 @@ export const chatAPI = {
   resetChat: (documentId) => api.delete(`/api/documents/${documentId}/reset`),
 };
 
-// Workspace API (for managed RAG)
-export const workspacesAPI = {
-  getAll: () => api.get('/api/workspaces'),
-  create: (data) => api.post('/api/workspaces', data),
-  getById: (id) => api.get(`/api/workspaces/${id}`),
-  update: (id, data) => api.put(`/api/workspaces/${id}`, data),
-  delete: (id) => api.delete(`/api/workspaces/${id}`),
-  migrateDocuments: (data) => api.post('/api/workspaces/migrate-documents', data),
-};
-
-// Managed RAG API (OpenAI Vector Stores + Assistants)
-export const managedRagAPI = {
-  uploadDocument: (formData) => {
-    return api.post('/api/managed-rag/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-  },
-  chat: (data) => api.post('/api/managed-rag/chat', data),
-  summarize: (data) => api.post('/api/managed-rag/summarize', data),
-  deleteDocument: (id) => api.delete(`/api/managed-rag/documents/${id}`),
-  getDocumentStatus: (id) => api.get(`/api/managed-rag/documents/${id}/status`),
-};
-
 export default api;

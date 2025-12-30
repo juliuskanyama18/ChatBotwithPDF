@@ -37,7 +37,7 @@ export default function Message({ message, onPageClick }) {
             <PageCitation
               key={`citation-${key++}`}
               pageNumber={pageNum}
-              onClick={onPageClick}
+              onClick={(p) => onPageClick(p, message)}
             />
           );
           if (idx < pageNumbers.length - 1) {
@@ -64,9 +64,10 @@ export default function Message({ message, onPageClick }) {
           <PageCitation
             key={`citation-${key++}`}
             pageNumber={pageNum}
-            onClick={onPageClick}
+            onClick={(p) => onPageClick(p, message)}
           />
         );
+
       }
 
       lastIndex = match.index + match[0].length;

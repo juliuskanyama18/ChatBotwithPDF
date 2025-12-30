@@ -14,10 +14,7 @@ import connectDB from './backend/config/database.js';
 import authRoutes from './backend/routes/auth.js';
 import documentRoutes from './backend/routes/documents.js';
 import chatRoutes from './backend/routes/chat.js';
-import workspaceRoutes from './backend/routes/workspaces.js';
-import managedRagRoutes from './backend/routes/managedRag.js';
 import { isPythonServiceHealthy } from './backend/utils/pythonServiceClient.js';
-import { logFeatureFlags } from './backend/utils/featureFlags.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -83,10 +80,6 @@ app.use('/api/auth', authRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api', chatRoutes);
 
-// Managed RAG routes (OpenAI Vector Stores + Assistants API)
-app.use('/api/workspaces', workspaceRoutes);
-app.use('/api/managed-rag', managedRagRoutes);
-
 // Legacy routes for backward compatibility
 import { protect } from './backend/middleware/auth.js';
 app.post('/uploadPdf', protect, (req, res, next) => {
@@ -132,9 +125,6 @@ app.listen(port, async () => {
     console.log(`🌐 URL: http://localhost:${port}`);
     console.log(`📁 Backend: MVC Structure ✅`);
     console.log('========================================');
-
-    // Log feature flags
-    logFeatureFlags();
 
     // Check Python service health
     await checkPythonServiceOnStartup();

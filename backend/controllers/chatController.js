@@ -4,9 +4,6 @@ import Document from '../models/Document.js';
 import Conversation from '../models/Conversation.js';
 import Message from '../models/Message.js';
 import { retrieveRelevantChunks, buildContextFromChunks } from '../utils/embeddings.js';
-import { detectPageReferences, expandPageRangeWithContext } from '../utils/pageDetector.js';
-import { classifyQuestionHeuristic } from '../utils/questionClassifier.js';
-import { STRICT_GROUNDING } from '../utils/featureFlags.js';
 
 // Lazy-load OpenAI client to ensure env vars are loaded
 let openai = null;
@@ -77,76 +74,54 @@ export async function generateResponse(req, res) {
         // Get document type for proper citation format
         const documentType = path.extname(document.fileName).substring(1).toLowerCase();
 
-        // Feature 4: Classify question type
-        const questionClass = classifyQuestionHeuristic(prompt, document.originalName);
-        console.log(`🏷️  Question classification: ${questionClass.classification} (confidence: ${questionClass.confidence})`);
-
-        // Handle OUTSIDE_PDF questions early
-        if (questionClass.classification === 'OUTSIDE_PDF') {
-            console.log('   ⚠️  Question appears unrelated to document - using NOT FOUND template');
-        }
-
-        // Detect page references in the question (Feature 1: Page-specific retrieval)
-        const pageDetection = detectPageReferences(prompt);
-        if (pageDetection.hasPageReference) {
-            console.log(`📍 Page detection: ${pageDetection.type} - Pages/Slides: ${pageDetection.pageNumbers.join(', ')}`);
-            if (pageDetection.originalMatch) {
-                console.log(`   Original match: "${pageDetection.originalMatch}"`);
-            }
-        }
-
         // RAG: Semantic search for relevant content
         let relevantContext = '';
         let pageReferences = [];
         let citationType = documentType === 'pptx' ? 'Slide' : 'Page';
 
         try {
-            // Only perform semantic search if question is related to document
-            if (questionClass.shouldSearchDocument) {
-                console.log('\n🔍 Starting RAG retrieval with similarity filtering...');
+            console.log('\n🔍 Starting RAG retrieval with similarity filtering...');
 
-                // Build page filter if page reference was detected
-                const pageFilter = pageDetection.hasPageReference ? {
-                    pageNumbers: expandPageRangeWithContext(pageDetection.pageNumbers, 1)
-                } : null;
+            // TASK A: Use retrieveRelevantChunks with type-aware similarity thresholds
+            const similarChunks = await retrieveRelevantChunks({
+                question: prompt,
+                documentId: documentId,
+                k: 15, // Retrieve more candidates to ensure we don't miss relevant content
+                pageFilter: null
+            });
 
-                if (pageFilter) {
-                    console.log(`   🎯 Filtering by ${citationType.toLowerCase()}s: ${pageFilter.pageNumbers.join(', ')} (with context window)`);
+            if (similarChunks && similarChunks.length > 0) {
+                // Determine citation type from chunk metadata
+                if (similarChunks[0].metadata && similarChunks[0].metadata.documentType) {
+                    citationType = similarChunks[0].metadata.documentType === 'pptx' ? 'Slide' : 'Page';
                 }
 
-                // TASK A: Use retrieveRelevantChunks with type-aware similarity thresholds
-                const similarChunks = await retrieveRelevantChunks({
-                    question: prompt,
-                    documentId: documentId,
-                    k: 15, // Retrieve more candidates to ensure we don't miss relevant content
-                    pageFilter: pageFilter
-                });
+                // TASK C: Use type-aware context building (4 text, 2 table, 2 image)
+                const buildResult = buildContextFromChunks(similarChunks);
+                // buildResult: { contextString, selectedChunks }
+                relevantContext = buildResult.contextString || '';
+                const selectedChunks = buildResult.selectedChunks || [];
 
-                if (similarChunks && similarChunks.length > 0) {
-                    // Determine citation type from chunk metadata
-                    if (similarChunks[0].metadata && similarChunks[0].metadata.documentType) {
-                        citationType = similarChunks[0].metadata.documentType === 'pptx' ? 'Slide' : 'Page';
-                    }
+                pageReferences = similarChunks
+                    .filter(chunk => chunk.pageNumber)
+                    .map(chunk => chunk.pageNumber);
 
-                    // TASK C: Use type-aware context building (4 text, 2 table, 2 image)
-                    relevantContext = buildContextFromChunks(similarChunks);
+                // Prepare chunk-level data for client highlighting (top selected chunks)
+                var relevantChunksForClient = selectedChunks.map(c => ({
+                    pageNumber: c.pageNumber,
+                    chunkText: c.chunkText,
+                    chunkIndex: c.chunkIndex,
+                    chunkType: c.chunkType || 'text',
+                    similarity: c.similarity || 1.0
+                }));
 
-                    pageReferences = similarChunks
-                        .filter(chunk => chunk.pageNumber)
-                        .map(chunk => chunk.pageNumber);
-
-                    console.log(`✅ RAG: Found ${similarChunks.length} relevant chunks passing similarity thresholds`);
-                    console.log(`   ${citationType}s: ${pageReferences.join(', ')}`);
-                    console.log(`   Top similarity score: ${similarChunks[0].similarity.toFixed(3)}`);
-                } else {
-                    // No chunks passed similarity threshold → Trigger NOT FOUND template
-                    console.log('⚠️ No chunks passed similarity thresholds → Using NOT FOUND template');
-                    relevantContext = '[No relevant information found in document - similarity scores too low]';
-                }
+                console.log(`✅ RAG: Found ${similarChunks.length} relevant chunks passing similarity thresholds`);
+                console.log(`   ${citationType}s: ${pageReferences.join(', ')}`);
+                console.log(`   Top similarity score: ${similarChunks[0].similarity.toFixed(3)}`);
             } else {
-                // OUTSIDE_PDF: Skip retrieval, use empty context
-                console.log('   ⏭️  Skipping document search (question classified as OUTSIDE_PDF)');
-                relevantContext = '[No relevant document context - question appears unrelated to document]';
+                // No chunks passed similarity threshold → Trigger NOT FOUND template
+                console.log('⚠️ No chunks passed similarity thresholds → Using NOT FOUND template');
+                relevantContext = '[No relevant information found in document - similarity scores too low]';
             }
         } catch (error) {
             console.error('Error in semantic search:', error);
@@ -155,7 +130,7 @@ export async function generateResponse(req, res) {
         }
 
         // Enhanced system prompt for intelligent document analysis
-        const strictMode = STRICT_GROUNDING();
+        const strictMode = false; // Normal mode (MANAGED RAG removed)
 
         const instruction = strictMode
             ? // STRICT GROUNDING MODE: Balanced - strict but helpful when context exists
@@ -322,7 +297,8 @@ export async function generateResponse(req, res) {
             reply: aiResponse,
             conversationId: conversation._id,
             ragEnabled: pageReferences.length > 0,
-            relevantPages: pageReferences
+            relevantPages: pageReferences,
+            relevantChunks: relevantChunksForClient || []
         });
 
     } catch (error) {

@@ -36,41 +36,6 @@ const documentSchema = new mongoose.Schema({
         type: String,
         default: null
     },
-
-    // OpenAI Managed RAG fields
-    workspaceId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Workspace',
-        default: null
-    },
-    openaiFileId: {
-        type: String,
-        default: null
-    },
-    openaiVectorStoreId: {
-        type: String,
-        default: null
-    },
-    sourceType: {
-        type: String,
-        enum: ['file', 'ocr_text', 'manual'],
-        default: 'file'
-    },
-    status: {
-        type: String,
-        enum: ['uploading', 'processing', 'indexing', 'ready', 'error'],
-        default: 'uploading'
-    },
-    ocrSourceDocumentId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref: 'Document',
-        default: null
-    },
-    processingError: {
-        type: String,
-        default: null
-    },
-
     uploadedAt: {
         type: Date,
         default: Date.now
