@@ -6,7 +6,10 @@
   "scripts": {
     "start": "node app.js",
     "dev": "nodemon app.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node backend/tests/phase-1-2-3-tests.js",
+    "test:all": "node backend/tests/phase-1-2-3-tests.js && node backend/tests/rag-improvement-tests.js",
+    "test:phase123": "node backend/tests/phase-1-2-3-tests.js",
+    "test:rag": "node backend/tests/rag-improvement-tests.js"
   },
   "keywords": [],
   "author": "",
@@ -36,6 +39,7 @@
     "openai": "^4.52.7",
     "path": "^0.12.7",
     "pdf-parse": "^1.1.1",
+    "pdfjs-dist": "^5.4.530",
     "sharp": "^0.34.5",
     "tesseract.js": "^6.0.1",
     "tiktoken": "^1.0.22",

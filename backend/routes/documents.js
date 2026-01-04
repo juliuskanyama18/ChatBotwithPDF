@@ -10,7 +10,8 @@ import {
     updateDocument,
     deleteDocument,
     getDocumentConversations,
-    getLatestConversation
+    getLatestConversation,
+    getFolderLatestConversation
 } from '../controllers/documentController.js';
 import { generateDocumentEmbeddings } from '../services/embeddingService.js';
 
@@ -57,5 +58,8 @@ router.get('/:id/conversations', protect, getDocumentConversations);
 
 // Get latest conversation for a document
 router.get('/:documentId/latest-conversation', protect, getLatestConversation);
+
+// Get latest conversation for a folder
+router.get('/folders/:folderId/latest-conversation', protect, getFolderLatestConversation);
 
 export default router;

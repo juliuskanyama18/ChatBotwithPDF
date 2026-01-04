@@ -1,54 +1,93 @@
 import path from 'path';
 import Document from '../models/Document.js';
-import { chunkText, cleanText } from '../utils/textProcessing.js';
+import { RecursiveCharacterTextSplitter, preprocessText, parseTableStructure, containsTable } from '../utils/semanticChunking.js';
 import { generateEmbeddingsBatch, storeEmbeddings } from '../utils/embeddings.js';
 import { extractAndCaptionImages, cleanupImageFiles } from '../utils/imageExtractor.js';
+import { extractTextWithPageBoundaries } from '../utils/documentProcessor.js';
 
 /**
- * Generate and store embeddings for a document
+ * Generate and store embeddings for a document (IMPROVED VERSION)
+ * Now uses semantic chunking and correct page boundaries for all formats
  */
-export async function generateDocumentEmbeddings(documentId, userId, text) {
+export async function generateDocumentEmbeddings(documentId, userId, rawText) {
     try {
-        console.log(`Starting embedding generation for document ${documentId}...`);
+        console.log(`\n🚀 Starting IMPROVED embedding generation for document ${documentId}...`);
 
         // Get document to check type
         const document = await Document.findById(documentId);
         const documentType = path.extname(document.fileName).substring(1).toLowerCase();
 
-        // Clean and chunk the text
-        const cleanedText = cleanText(text);
-        // Increased chunk size (800 tokens) and overlap (100 tokens)
-        const chunks = chunkText(cleanedText, 800, 100);
+        // IMPROVEMENT 1: Extract text with correct page/slide boundaries
+        const pageTexts = await extractTextWithPageBoundaries(
+            document.filePath,
+            documentType,
+            rawText
+        );
 
-        console.log(`Generated ${chunks.length} chunks for document ${documentId}`);
+        console.log(`   📊 Extracted ${pageTexts.length} ${pageTexts[0]?.pageType || 'page'}s`);
 
-        // Prepare chunks with metadata - detect page/slide numbers
-        const chunksWithMetadata = chunks.map((chunkText, index) => {
-            let pageNumber = Math.floor(index / 2) + 1; // Default approximation
+        // IMPROVEMENT 2: Process each page/slide with semantic chunking
+        const allChunksWithPages = [];
 
-            // For PPTX: Look for "--- Slide X ---" markers
-            if (documentType === 'pptx') {
-                const slideMatch = chunkText.match(/---\s*Slide\s+(\d+)\s*---/i);
-                if (slideMatch) {
-                    pageNumber = parseInt(slideMatch[1], 10);
-                }
-            }
-            // For PDF: Look for "--- Page X ---" markers
-            else if (documentType === 'pdf') {
-                const pageMatch = chunkText.match(/---\s*Page\s+(\d+)\s*---/i);
-                if (pageMatch) {
-                    pageNumber = parseInt(pageMatch[1], 10);
-                }
+        for (const pageData of pageTexts) {
+            const cleanedText = preprocessText(pageData.text);
+
+            if (!cleanedText || cleanedText.length < 50) {
+                console.log(`   ⏭️  Skipping ${pageData.pageType} ${pageData.pageNumber} (too short)`);
+                continue;
             }
 
-            return {
-                text: chunkText,
-                pageNumber: pageNumber,
-                chunkIndex: index
-            };
-        });
+            // IMPROVEMENT 3: Use semantic chunking with format-aware parameters
+            const chunkParams = getChunkingParams(documentType);
+            const splitter = new RecursiveCharacterTextSplitter(chunkParams);
 
-        // Feature 3: Extract and caption images (if PDF)
+            // 🎯 PHASE 2: Use splitTextWithOffsets for character offset tracking
+            const pageChunksWithOffsets = splitter.splitTextWithOffsets(cleanedText);
+            console.log(`   📄 ${pageData.pageType} ${pageData.pageNumber}: ${pageChunksWithOffsets.length} chunks`);
+
+            // Add page metadata to each chunk
+            pageChunksWithOffsets.forEach((chunkData) => {
+                // 🎯 PHASE 2: Check if chunk contains a table
+                let chunkType = 'text';
+                let tableStructure = null;
+                let finalText = chunkData.text;
+
+                if (containsTable(chunkData.text)) {
+                    const parsed = parseTableStructure(chunkData.text);
+                    if (parsed.structured) {
+                        chunkType = 'table';
+                        tableStructure = {
+                            headers: parsed.headers,
+                            data: parsed.data,
+                            rowCount: parsed.rowCount,
+                            columnCount: parsed.columnCount,
+                            format: parsed.format
+                        };
+                        // Use searchable text for embedding
+                        finalText = parsed.searchableText;
+                        console.log(`      📊 Table detected: ${parsed.rowCount}x${parsed.columnCount}`);
+                    }
+                }
+
+                allChunksWithPages.push({
+                    text: finalText,
+                    pageNumber: pageData.pageNumber,
+                    pageType: pageData.pageType,
+                    chunkIndex: allChunksWithPages.length,
+                    chunkType,
+                    // 🎯 PHASE 2: Store character offsets
+                    startOffset: chunkData.startOffset,
+                    endOffset: chunkData.endOffset,
+                    lineRange: chunkData.lineRange,
+                    // 🎯 PHASE 2: Store table structure if applicable
+                    tableStructure
+                });
+            });
+        }
+
+        console.log(`   📊 Total text chunks: ${allChunksWithPages.length}`);
+
+        // IMPROVEMENT 4: Extract and caption images (PDF only for now)
         let imageCaptions = [];
         let imageFiles = [];
 
@@ -57,16 +96,14 @@ export async function generateDocumentEmbeddings(documentId, userId, text) {
                 const captionedImages = await extractAndCaptionImages(document.filePath, documentType);
 
                 if (captionedImages.length > 0) {
-                    // Add image captions as separate chunks with special marker
                     imageCaptions = captionedImages.map((img, idx) => ({
                         text: `[IMAGE DESCRIPTION - Page ${img.pageNumber}]: ${img.caption}`,
                         pageNumber: img.pageNumber,
-                        chunkIndex: chunksWithMetadata.length + idx
+                        pageType: 'page',
+                        chunkIndex: allChunksWithPages.length + idx
                     }));
 
-                    // Collect image file paths for cleanup
                     imageFiles = captionedImages.map(img => img.imagePath);
-
                     console.log(`   📷 Added ${imageCaptions.length} image caption chunks`);
                 }
             } catch (error) {
@@ -76,13 +113,14 @@ export async function generateDocumentEmbeddings(documentId, userId, text) {
         }
 
         // Combine text chunks and image captions
-        const allChunks = [...chunksWithMetadata, ...imageCaptions];
+        const allChunks = [...allChunksWithPages, ...imageCaptions];
+        console.log(`   ✅ Total chunks (text + images): ${allChunks.length}`);
 
         // Generate embeddings for all chunks (text + image captions)
         const textArray = allChunks.map(c => c.text);
         const embeddings = await generateEmbeddingsBatch(textArray);
 
-        console.log(`Generated ${embeddings.length} embeddings for document ${documentId} (${chunksWithMetadata.length} text + ${imageCaptions.length} images)`);
+        console.log(`   ✅ Generated ${embeddings.length} embeddings`);
 
         // Store embeddings in database with document type
         await storeEmbeddings(documentId, userId, allChunks, embeddings, documentType);
@@ -92,9 +130,49 @@ export async function generateDocumentEmbeddings(documentId, userId, text) {
             cleanupImageFiles(imageFiles);
         }
 
-        console.log(`✅ Successfully stored embeddings for document ${documentId}`);
+        console.log(`✅ Successfully stored embeddings for document ${documentId}\n`);
     } catch (error) {
-        console.error(`Error in generateDocumentEmbeddings for ${documentId}:`, error);
+        console.error(`❌ Error in generateDocumentEmbeddings for ${documentId}:`, error);
         throw error;
+    }
+}
+
+/**
+ * Get optimal chunking parameters for each document type
+ * Different formats need different chunking strategies
+ */
+function getChunkingParams(documentType) {
+    switch (documentType) {
+        case 'pdf':
+            // PDFs: Standard academic/business documents
+            return {
+                chunkSize: 800,          // Increased from 500
+                chunkOverlap: 100,       // Increased from 50
+                separators: ['\n\n', '\n', '. ', '! ', '? ', ', ', ' ', '']
+            };
+
+        case 'pptx':
+            // Slides: Shorter, more concise content
+            return {
+                chunkSize: 500,
+                chunkOverlap: 75,
+                separators: ['\n\n', '\n', '. ', '! ', '? ', ' ', '']
+            };
+
+        case 'docx':
+            // Documents: Can be very long, need larger chunks
+            return {
+                chunkSize: 1000,
+                chunkOverlap: 150,
+                separators: ['\n\n', '\n', '. ', '! ', '? ', ', ', ' ', '']
+            };
+
+        default:
+            // Default fallback
+            return {
+                chunkSize: 800,
+                chunkOverlap: 100,
+                separators: ['\n\n', '\n', '. ', '! ', '? ', ', ', ' ', '']
+            };
     }
 }

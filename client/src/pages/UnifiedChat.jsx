@@ -21,6 +21,7 @@ import {
   Edit2,
   X,
   ChevronDown,
+  Info,
 } from 'lucide-react';
 import { documentsAPI, chatAPI } from '../services/api';
 import { useAuth } from '../hooks/useAuth';
@@ -66,6 +67,14 @@ export default function UnifiedChat() {
   const [renamingFolderId, setRenamingFolderId] = useState(null);
   const [renamingFolderValue, setRenamingFolderValue] = useState('');
   const [showAllChats, setShowAllChats] = useState(false);
+
+  // FOLDER CHAT MODE STATE
+  const [chatMode, setChatMode] = useState('document'); // 'document' | 'folder'
+  const [currentFolder, setCurrentFolder] = useState(null);
+  const [folderDocuments, setFolderDocuments] = useState([]);
+  const [documentDropdownOpen, setDocumentDropdownOpen] = useState(false);
+  const [pendingPageScroll, setPendingPageScroll] = useState(null); // {pageNumber, message, documentName}
+  const [folderHeaderMenuOpen, setFolderHeaderMenuOpen] = useState(false);
 
   // VIEW MODE STATE
   const [viewMode, setViewMode] = useState('both'); // 'both' | 'document' | 'chat'
@@ -176,16 +185,34 @@ export default function UnifiedChat() {
     const handleClickOutside = () => {
       setActiveContextMenu(null);
       setDocumentTitleMenuOpen(false);
+      setFolderHeaderMenuOpen(false);
     };
 
-    if (activeContextMenu || documentTitleMenuOpen) {
+    if (activeContextMenu || documentTitleMenuOpen || folderHeaderMenuOpen) {
       document.addEventListener('click', handleClickOutside);
     }
 
     return () => {
       document.removeEventListener('click', handleClickOutside);
     };
-  }, [activeContextMenu, documentTitleMenuOpen]);
+  }, [activeContextMenu, documentTitleMenuOpen, folderHeaderMenuOpen]);
+
+  // Handle pending page scroll after document loads (for cross-document navigation)
+  useEffect(() => {
+    if (pendingPageScroll && currentDocument) {
+      // Give the document viewer a moment to render
+      const timer = setTimeout(() => {
+        scrollToPageInDocument(pendingPageScroll.pageNumber, pendingPageScroll.message);
+        toast.dismiss('loading-doc');
+        toast.success(`Jumped to page ${pendingPageScroll.pageNumber} in ${pendingPageScroll.documentName}`, {
+          duration: 2000,
+        });
+        setPendingPageScroll(null); // Clear pending scroll
+      }, 800); // 800ms gives the document viewer time to fully load
+
+      return () => clearTimeout(timer);
+    }
+  }, [currentDocument, pendingPageScroll]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -241,9 +268,62 @@ export default function UnifiedChat() {
     }
   };
 
+  const loadFolderConversation = async (folderId) => {
+    try {
+      setMessages([]);
+      const response = await documentsAPI.getFolderConversation(folderId);
+      if (response.data.success && response.data.messages && response.data.messages.length > 0) {
+        setMessages(response.data.messages);
+        setConversationId(response.data.conversation._id);
+      }
+    } catch (error) {
+      console.error('Error loading folder conversation:', error);
+    }
+  };
+
+  const handleFolderClick = (folderId) => {
+    const folder = folders.find(f => f.id === folderId);
+    if (!folder) return;
+
+    // Get all documents in this folder
+    const docsInFolder = documents.filter(doc =>
+      folder.documents.includes(doc._id)
+    );
+
+    if (docsInFolder.length === 0) {
+      toast.error('This folder is empty. Add documents to start chatting.');
+      return;
+    }
+
+    // Enter folder chat mode
+    setChatMode('folder');
+    setCurrentFolder(folder);
+    setFolderDocuments(docsInFolder);
+    setCurrentDocument(null); // Clear single document
+    setMessages([]);
+    setConversationId(null);
+
+    // Load folder conversation (if exists)
+    loadFolderConversation(folderId);
+
+    toast.success(`Chatting with folder: ${folder.name}`);
+  };
+
   const handleSendMessage = async (e) => {
     e.preventDefault();
-    if (!input.trim() || loading || !currentDocument) return;
+
+    // Validation based on mode
+    if (!input.trim() || loading) return;
+
+    if (chatMode === 'document' && !currentDocument) {
+      toast.error('Please select a document first');
+      return;
+    }
+
+    if (chatMode === 'folder' && (!currentFolder || folderDocuments.length === 0)) {
+      toast.error('Please select a folder with documents');
+      return;
+    }
 
     const userMessage = {
       role: 'user',
@@ -256,11 +336,24 @@ export default function UnifiedChat() {
     setLoading(true);
 
     try {
-      const response = await chatAPI.sendMessage({
-        prompt: input,
-        documentId: currentDocument._id,
-        conversationId,
-      });
+      let response;
+
+      if (chatMode === 'folder') {
+        // FOLDER MODE: Send multiple document IDs
+        response = await chatAPI.sendMessage({
+          prompt: input,
+          documentIds: folderDocuments.map(doc => doc._id),
+          folderId: currentFolder.id,
+          conversationId,
+        });
+      } else {
+        // DOCUMENT MODE: Single document ID (existing flow)
+        response = await chatAPI.sendMessage({
+          prompt: input,
+          documentId: currentDocument._id,
+          conversationId,
+        });
+      }
 
       const aiMessage = {
         role: 'assistant',
@@ -268,7 +361,8 @@ export default function UnifiedChat() {
         _id: (Date.now() + 1).toString(),
         pageReference: response.data.relevantPages?.[0],
         relevantPages: response.data.relevantPages || [],
-        relevantChunks: response.data.relevantChunks || []
+        relevantChunks: response.data.relevantChunks || [],
+        sourceDocument: response.data.sourceDocument || null
       };
 
       setMessages((prev) => [...prev, aiMessage]);
@@ -287,7 +381,46 @@ export default function UnifiedChat() {
     }
   };
 
-  const handlePageClick = (pageNumber, message = null) => {
+  const handlePageClick = async (pageNumber, documentName = null, message = null) => {
+    // Check if we need to load a different document (folder mode with document name)
+    if (chatMode === 'folder' && documentName) {
+      // Find the document by name
+      const targetDoc = folderDocuments.find(doc =>
+        doc.originalName === documentName || doc.fileName === documentName
+      );
+
+      if (!targetDoc) {
+        toast.error(`Document "${documentName}" not found in folder`);
+        return;
+      }
+
+      // Check if it's already the current document
+      if (currentDocument?._id === targetDoc._id) {
+        // Same document - just scroll
+        scrollToPageInDocument(pageNumber, message);
+        toast.success(`Jumped to page ${pageNumber}`, {
+          duration: 2000,
+          position: 'top-center',
+        });
+      } else {
+        // Different document - load it and set pending scroll
+        toast.loading(`Loading ${documentName}...`, { id: 'loading-doc' });
+        setPendingPageScroll({ pageNumber, message, documentName });
+        setCurrentDocument(targetDoc);
+        // useEffect will handle scrolling after document loads
+      }
+
+    } else {
+      // Same document or document mode - just scroll
+      scrollToPageInDocument(pageNumber, message);
+      toast.success(`Jumped to page ${pageNumber}`, {
+        duration: 2000,
+        position: 'top-center',
+      });
+    }
+  };
+
+  const scrollToPageInDocument = (pageNumber, message = null) => {
     if (documentViewerRef.current && documentViewerRef.current.scrollToPage) {
       documentViewerRef.current.scrollToPage(pageNumber);
 
@@ -307,11 +440,6 @@ export default function UnifiedChat() {
       } else if (documentViewerRef.current.highlightPages) {
         documentViewerRef.current.highlightPages([pageNumber]);
       }
-
-      toast.success(`Jumped to page ${pageNumber}`, {
-        duration: 2000,
-        position: 'top-center',
-      });
     }
   };
 
@@ -714,6 +842,17 @@ export default function UnifiedChat() {
       // Explicitly save to localStorage
       localStorage.setItem('chatpdf_folders', JSON.stringify(updatedFolders));
       setFolderContextMenu(null);
+
+      // If currently in folder mode and the deleted folder is the current one, exit folder mode
+      if (chatMode === 'folder' && currentFolder?.id === folderId) {
+        setChatMode('document');
+        setCurrentFolder(null);
+        setFolderDocuments([]);
+        setMessages([]);
+        setConversationId(null);
+        setCurrentDocument(null);
+      }
+
       toast.success('Folder deleted successfully');
     }
   };
@@ -880,9 +1019,122 @@ export default function UnifiedChat() {
           </button>
         </div>
 
-        {/* Center Section - Clickable Document Title */}
+        {/* Center Section - Clickable Document/Folder Title */}
         <div className="flex-1 flex items-center justify-center px-4">
-          {currentDocument ? (
+          {chatMode === 'folder' ? (
+            // FOLDER MODE: Show folder button with name and file count
+            <div className="relative">
+              <div className="group inline-flex items-center justify-center gap-2 font-medium min-w-0 text-start transition-all duration-200 text-gray-900 rounded-md hover:bg-gray-100 h-8 px-2">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDocumentDropdownOpen(!documentDropdownOpen);
+                  }}
+                  className="inline-flex items-center gap-2 focus:outline-none"
+                  title={currentFolder?.name}
+                >
+                  <Folder className="size-3.5 text-gray-700 flex-shrink-0" />
+                  <span className="truncate max-w-[200px]">{currentFolder?.name || 'Folder'}</span>
+                  <span className="text-gray-500 font-normal flex-shrink-0">{folderDocuments.length} files</span>
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setFolderHeaderMenuOpen(!folderHeaderMenuOpen);
+                  }}
+                  className="ml-auto flex-shrink-0 p-1 rounded hover:bg-gray-200 transition-colors focus:outline-none"
+                  title="Folder options"
+                >
+                  <MoreVertical className="size-4 text-gray-500 group-hover:text-gray-900" />
+                </button>
+              </div>
+
+              {/* Document Dropdown Menu */}
+              {documentDropdownOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-10"
+                    onClick={() => setDocumentDropdownOpen(false)}
+                  />
+                  <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-20 max-h-96 overflow-y-auto">
+                    <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase">
+                      Documents in folder
+                    </div>
+                    {folderDocuments.map((doc) => (
+                      <button
+                        key={doc._id}
+                        onClick={() => {
+                          setCurrentDocument(doc);
+                          setDocumentDropdownOpen(false);
+                          toast.success(`Viewing: ${doc.originalName}`);
+                        }}
+                        className={`w-full flex items-center space-x-2 px-4 py-2 hover:bg-gray-50 text-left text-sm ${
+                          currentDocument?._id === doc._id ? 'bg-primary-50 text-primary-700' : 'text-gray-700'
+                        }`}
+                      >
+                        <FileText className="w-4 h-4 flex-shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate font-medium">{doc.originalName}</p>
+                          <p className="text-xs text-gray-500">{doc.pageCount} pages</p>
+                        </div>
+                        {currentDocument?._id === doc._id && (
+                          <div className="w-2 h-2 bg-primary-600 rounded-full flex-shrink-0" />
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {/* Folder Context Menu */}
+              {folderHeaderMenuOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-10"
+                    onClick={() => setFolderHeaderMenuOpen(false)}
+                  />
+                  <div className="absolute top-full left-1/2 transform -translate-x-1/2 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
+                    <button
+                      onClick={() => {
+                        handleRenameFolder(currentFolder.id, currentFolder.name);
+                        setFolderHeaderMenuOpen(false);
+                      }}
+                      className="w-full flex items-center space-x-2 px-4 py-2 hover:bg-gray-50 text-gray-700 text-sm"
+                    >
+                      <Edit2 className="w-4 h-4" />
+                      <span>Rename chat</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        if (window.confirm('Are you sure you want to reset this folder chat? All messages will be deleted.')) {
+                          setMessages([]);
+                          setConversationId(null);
+                          toast.success('Folder chat reset successfully');
+                        }
+                        setFolderHeaderMenuOpen(false);
+                      }}
+                      className="w-full flex items-center space-x-2 px-4 py-2 hover:bg-gray-50 text-gray-700 text-sm"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      <span>Reset chat</span>
+                    </button>
+                    <div className="border-t border-gray-200 my-1"></div>
+                    <button
+                      onClick={() => {
+                        handleDeleteFolder(currentFolder.id);
+                        setFolderHeaderMenuOpen(false);
+                      }}
+                      className="w-full flex items-center space-x-2 px-4 py-2 hover:bg-red-50 text-red-600 text-sm"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          ) : currentDocument ? (
+            // DOCUMENT MODE: Show single document title
             <div className="relative">
               <button
                 onClick={(e) => {
@@ -990,6 +1242,7 @@ export default function UnifiedChat() {
               )}
             </div>
           ) : (
+            // NO SELECTION: Show ChatPDF branding
             <div className="flex items-center space-x-2">
               <Sparkles className="w-5 h-5 text-primary-600" />
               <span className="font-semibold text-gray-900">ChatPDF</span>
@@ -1233,13 +1486,21 @@ export default function UnifiedChat() {
                                 <div className="flex items-center space-x-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-lg transition-colors group">
                                   <button
                                     onClick={() => toggleFolder(folder.id)}
-                                    className="flex items-center space-x-2 flex-1"
+                                    className="flex items-center"
                                   >
                                     {isExpanded ? (
                                       <ChevronDown className="w-4 h-4 text-gray-400" />
                                     ) : (
                                       <ChevronRight className="w-4 h-4 text-gray-400" />
                                     )}
+                                  </button>
+
+                                  {/* CLICKABLE FOLDER NAME */}
+                                  <button
+                                    onClick={() => handleFolderClick(folder.id)}
+                                    className="flex items-center space-x-2 flex-1 hover:text-primary-600 transition-colors"
+                                    title={`Chat with folder: ${folder.name}`}
+                                  >
                                     <Folder className="w-4 h-4 text-gray-400" />
                                     {renamingFolderId === folder.id ? (
                                       <input
@@ -1260,7 +1521,14 @@ export default function UnifiedChat() {
                                         onClick={(e) => e.stopPropagation()}
                                       />
                                     ) : (
-                                      <span className="flex-1 truncate text-left">{folder.name}</span>
+                                      <span className="flex-1 truncate text-left font-medium">
+                                        {folder.name}
+                                        {folderDocs.length > 0 && (
+                                          <span className="ml-2 text-xs text-gray-500">
+                                            ({folderDocs.length} docs)
+                                          </span>
+                                        )}
+                                      </span>
                                     )}
                                   </button>
 
@@ -1333,19 +1601,119 @@ export default function UnifiedChat() {
         )}
 
         {/* Main Content */}
-        <div className={`flex-1 overflow-hidden flex relative ${viewMode === 'both' ? 'flex-row' : 'flex-col'}`}> 
-          {viewMode === 'document' && currentDocument && (
-            <div className="flex-1 bg-gray-900 overflow-y-auto overflow-x-hidden">
-              <UniversalDocumentViewer
-                ref={documentViewerRef}
-                documentId={currentDocument._id}
-                fileName={currentDocument.fileName}
-                originalName={currentDocument.originalName}
-              />
-            </div>
+        <div className={`flex-1 overflow-hidden flex relative ${viewMode === 'both' ? 'flex-row' : 'flex-col'}`}>
+          {viewMode === 'document' && (
+            <>
+              {currentDocument ? (
+                <div className="flex-1 bg-gray-900 overflow-y-auto overflow-x-hidden">
+                  <UniversalDocumentViewer
+                    ref={documentViewerRef}
+                    documentId={currentDocument._id}
+                    fileName={currentDocument.fileName}
+                    originalName={currentDocument.originalName}
+                  />
+                </div>
+              ) : chatMode === 'folder' ? (
+                // FOLDER MODE: No document selected - Show folder placeholder
+                <div className="flex-1 bg-gray-50 flex items-center justify-center p-8">
+                  <div className="text-center max-w-md">
+                    <Folder className="w-16 h-16 text-primary-600 mx-auto mb-4" />
+                    <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                      Folder: {currentFolder?.name}
+                    </h3>
+                    <p className="text-gray-600 mb-6">
+                      This folder contains {folderDocuments.length} document{folderDocuments.length !== 1 ? 's' : ''}.
+                      Select a document from the dropdown above to view it.
+                    </p>
+                    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 max-h-96 overflow-y-auto">
+                      <p className="text-sm font-semibold text-gray-700 mb-3 text-left">
+                        Documents in this folder:
+                      </p>
+                      <div className="space-y-2">
+                        {folderDocuments.map((doc) => (
+                          <button
+                            key={doc._id}
+                            onClick={() => {
+                              setCurrentDocument(doc);
+                              toast.success(`Viewing: ${doc.originalName}`);
+                            }}
+                            className="w-full flex items-center space-x-3 p-3 hover:bg-gray-50 rounded-lg transition-colors text-left border border-gray-200"
+                          >
+                            <FileText className="w-5 h-5 text-gray-600 flex-shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium text-gray-900 truncate">{doc.originalName}</p>
+                              <p className="text-xs text-gray-500">{doc.pageCount} pages</p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </>
           )}
           {viewMode === 'chat' && (
             <div className="flex-1 flex flex-col bg-white">
+              {/* Chat Header - Small info bar */}
+              {chatMode === 'folder' && (
+                <div className="flex items-center px-3 py-2 text-gray-600 justify-between text-sm border-b border-gray-200 bg-gray-50">
+                  <div className="flex items-center gap-2">
+                    <Info className="size-3.5 shrink-0" />
+                    <span className="text-sm">You are chatting with the folder</span>
+                  </div>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDocumentDropdownOpen(!documentDropdownOpen);
+                    }}
+                    className="relative inline-flex items-center gap-1.5 px-2.5 py-1 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+                  >
+                    <span className="truncate max-w-[150px]">
+                      {currentDocument ? currentDocument.originalName : 'Chat with file'}
+                    </span>
+                    <ChevronDown className="size-4 shrink-0" />
+
+                    {/* Document Dropdown Menu */}
+                    {documentDropdownOpen && (
+                      <>
+                        <div
+                          className="fixed inset-0 z-10"
+                          onClick={() => setDocumentDropdownOpen(false)}
+                        />
+                        <div className="absolute top-full right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-20 max-h-96 overflow-y-auto">
+                          <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase">
+                            Documents in folder
+                          </div>
+                          {folderDocuments.map((doc) => (
+                            <button
+                              key={doc._id}
+                              onClick={() => {
+                                setCurrentDocument(doc);
+                                setDocumentDropdownOpen(false);
+                                toast.success(`Viewing: ${doc.originalName}`);
+                              }}
+                              className={`w-full flex items-center space-x-2 px-4 py-2 hover:bg-gray-50 text-left text-sm ${
+                                currentDocument?._id === doc._id ? 'bg-primary-50 text-primary-700' : 'text-gray-700'
+                              }`}
+                            >
+                              <FileText className="w-4 h-4 flex-shrink-0" />
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate font-medium">{doc.originalName}</p>
+                                <p className="text-xs text-gray-500">{doc.pageCount} pages</p>
+                              </div>
+                              {currentDocument?._id === doc._id && (
+                                <div className="w-2 h-2 bg-primary-600 rounded-full flex-shrink-0" />
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
+
               {/* Messages Area - Scrollable */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
                 {messages.length === 0 ? (
@@ -1417,17 +1785,136 @@ export default function UnifiedChat() {
               </div>
             </div>
           )}
-          {viewMode === 'both' && currentDocument && (
+          {viewMode === 'both' && (
             <>
-              <div className="flex-1 bg-gray-900 overflow-y-auto overflow-x-hidden">
-                <UniversalDocumentViewer
-                  ref={documentViewerRef}
-                  documentId={currentDocument._id}
-                  fileName={currentDocument.fileName}
-                  originalName={currentDocument.originalName}
+              {currentDocument ? (
+                <div
+                  className="bg-gray-900 overflow-y-auto overflow-x-hidden"
+                  style={{ width: `${documentWidth}%` }}
+                >
+                  <UniversalDocumentViewer
+                    ref={documentViewerRef}
+                    documentId={currentDocument._id}
+                    fileName={currentDocument.fileName}
+                    originalName={currentDocument.originalName}
+                  />
+                </div>
+              ) : chatMode === 'folder' ? (
+                // FOLDER MODE: No document selected - Show folder placeholder
+                <div
+                  className="bg-gray-50 flex items-center justify-center p-8"
+                  style={{ width: `${documentWidth}%` }}
+                >
+                  <div className="text-center max-w-md">
+                    <Folder className="w-16 h-16 text-primary-600 mx-auto mb-4" />
+                    <h3 className="text-xl font-semibold text-gray-900 mb-2">
+                      Folder: {currentFolder?.name}
+                    </h3>
+                    <p className="text-gray-600 mb-6">
+                      This folder contains {folderDocuments.length} document{folderDocuments.length !== 1 ? 's' : ''}.
+                      Select a document from the dropdown above to view it.
+                    </p>
+                    <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 max-h-96 overflow-y-auto">
+                      <p className="text-sm font-semibold text-gray-700 mb-3 text-left">
+                        Documents in this folder:
+                      </p>
+                      <div className="space-y-2">
+                        {folderDocuments.map((doc) => (
+                          <button
+                            key={doc._id}
+                            onClick={() => {
+                              setCurrentDocument(doc);
+                              toast.success(`Viewing: ${doc.originalName}`);
+                            }}
+                            className="w-full flex items-center space-x-3 p-3 hover:bg-gray-50 rounded-lg transition-colors text-left border border-gray-200"
+                          >
+                            <FileText className="w-5 h-5 text-gray-600 flex-shrink-0" />
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium text-gray-900 truncate">{doc.originalName}</p>
+                              <p className="text-xs text-gray-500">{doc.pageCount} pages</p>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="bg-gray-50"
+                  style={{ width: `${documentWidth}%` }}
                 />
-              </div>
-              <div className="flex-1 flex flex-col bg-white">
+              )}
+
+              {/* Resizable divider */}
+              <div
+                className="w-1 bg-gray-300 hover:bg-primary-500 cursor-col-resize transition-colors flex-shrink-0"
+                onMouseDown={() => setIsResizingDocument(true)}
+              />
+
+              <div
+                className="flex flex-col bg-white"
+                style={{ width: `${100 - documentWidth}%` }}
+              >
+                {/* Chat Header - Small info bar */}
+                {chatMode === 'folder' && (
+                  <div className="flex items-center px-3 py-2 text-gray-600 justify-between text-sm border-b border-gray-200 bg-gray-50">
+                    <div className="flex items-center gap-2">
+                      <Info className="size-3.5 shrink-0" />
+                      <span className="text-sm">You are chatting with the folder</span>
+                    </div>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setDocumentDropdownOpen(!documentDropdownOpen);
+                      }}
+                      className="relative inline-flex items-center gap-1.5 px-2.5 py-1 text-sm font-medium text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
+                    >
+                      <span className="truncate max-w-[150px]">
+                        {currentDocument ? currentDocument.originalName : 'Chat with file'}
+                      </span>
+                      <ChevronDown className="size-4 shrink-0" />
+
+                      {/* Document Dropdown Menu */}
+                      {documentDropdownOpen && (
+                        <>
+                          <div
+                            className="fixed inset-0 z-10"
+                            onClick={() => setDocumentDropdownOpen(false)}
+                          />
+                          <div className="absolute top-full right-0 mt-2 w-64 bg-white rounded-lg shadow-lg border border-gray-200 py-2 z-20 max-h-96 overflow-y-auto">
+                            <div className="px-3 py-2 text-xs font-semibold text-gray-500 uppercase">
+                              Documents in folder
+                            </div>
+                            {folderDocuments.map((doc) => (
+                              <button
+                                key={doc._id}
+                                onClick={() => {
+                                  setCurrentDocument(doc);
+                                  setDocumentDropdownOpen(false);
+                                  toast.success(`Viewing: ${doc.originalName}`);
+                                }}
+                                className={`w-full flex items-center space-x-2 px-4 py-2 hover:bg-gray-50 text-left text-sm ${
+                                  currentDocument?._id === doc._id ? 'bg-primary-50 text-primary-700' : 'text-gray-700'
+                                }`}
+                              >
+                                <FileText className="w-4 h-4 flex-shrink-0" />
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate font-medium">{doc.originalName}</p>
+                                  <p className="text-xs text-gray-500">{doc.pageCount} pages</p>
+                                </div>
+                                {currentDocument?._id === doc._id && (
+                                  <div className="w-2 h-2 bg-primary-600 rounded-full flex-shrink-0" />
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
+                    </button>
+                  </div>
+                )}
+
                 {/* Messages Area - Scrollable */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
                   {messages.length === 0 ? (

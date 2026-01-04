@@ -1,0 +1,29 @@
+{
+  "testDocument": {
+    "path": "",
+    "description": "Path to your test PDF document (e.g., 'pdfs/sample.pdf')"
+  },
+  "testQuestions": [
+    {
+      "question": "What is the main topic of page 3?",
+      "expectedPage": 3,
+      "description": "Test if page 3 content is correctly retrieved"
+    },
+    {
+      "question": "What are the key findings?",
+      "expectedPages": [5, 6, 7],
+      "description": "Test if multiple relevant pages are found"
+    },
+    {
+      "question": "Summarize the conclusion",
+      "expectedPages": [10, 11],
+      "description": "Test if conclusion pages are identified"
+    }
+  ],
+  "instructions": {
+    "step1": "Replace 'testDocument.path' with your test PDF file path",
+    "step2": "Update testQuestions with questions relevant to your document",
+    "step3": "Set expectedPage numbers for each question",
+    "step4": "Run: node backend/tests/rag-improvement-tests.js"
+  }
+}

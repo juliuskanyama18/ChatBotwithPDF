@@ -7,10 +7,11 @@ export default function Message({ message, onPageClick }) {
 
   // Parse message content to extract and render page citations
   const renderContentWithCitations = (content) => {
-    // Combined pattern to match:
-    // 1. [Page 5] or [Slide 10] - citation format
-    // 2. page 31, on page 5, Page 10 shows - natural mentions
-    const combinedPattern = /(\[(Page|Slide)\s+(\d+(?:\s*,\s*\d+)*)\])|(?:(?:on|at|in|from)?\s*(?:page|slide|Page|Slide)\s+(\d+))/gi;
+    // Enhanced pattern to match:
+    // 1. [filename.pdf - Page 5] or [Document Name - Slide 10] - multi-doc format
+    // 2. [Page 5] or [Slide 10] - single-doc citation format
+    // 3. page 31, on page 5, Page 10 shows - natural mentions
+    const combinedPattern = /(\[([^\]]+?)\s*-\s*(Page|Slide)\s+(\d+(?:\s*,\s*\d+)*)\])|(\[(Page|Slide)\s+(\d+(?:\s*,\s*\d+)*)\])|(?:(?:on|at|in|from)?\s*(?:page|slide|Page|Slide)\s+(\d+))/gi;
 
     const parts = [];
     let lastIndex = 0;
@@ -28,27 +29,47 @@ export default function Message({ message, onPageClick }) {
         );
       }
 
-      // Check if it's citation format [Page X] or natural mention
+      // Check which pattern matched
       if (match[1]) {
-        // Citation format: [Page 5] or [Page 5, 6, 7]
-        const pageNumbers = match[3].split(/\s*,\s*/).map(num => parseInt(num.trim()));
+        // Multi-doc format: [filename.pdf - Page 5]
+        const documentName = match[2].trim();
+        const citationType = match[3]; // "Page" or "Slide"
+        const pageNumbers = match[4].split(/\s*,\s*/).map(num => parseInt(num.trim()));
+
         pageNumbers.forEach((pageNum, idx) => {
           parts.push(
             <PageCitation
               key={`citation-${key++}`}
               pageNumber={pageNum}
-              onClick={(p) => onPageClick(p, message)}
+              documentName={documentName}
+              onClick={(p, docName) => onPageClick(p, docName, message)}
             />
           );
           if (idx < pageNumbers.length - 1) {
             parts.push(<span key={`comma-${key++}`}>, </span>);
           }
         });
-      } else if (match[4]) {
+      } else if (match[5]) {
+        // Single-doc format: [Page 5] or [Page 5, 6, 7]
+        const pageNumbers = match[7].split(/\s*,\s*/).map(num => parseInt(num.trim()));
+        pageNumbers.forEach((pageNum, idx) => {
+          parts.push(
+            <PageCitation
+              key={`citation-${key++}`}
+              pageNumber={pageNum}
+              documentName={null}
+              onClick={(p) => onPageClick(p, null, message)}
+            />
+          );
+          if (idx < pageNumbers.length - 1) {
+            parts.push(<span key={`comma-${key++}`}>, </span>);
+          }
+        });
+      } else if (match[8]) {
         // Natural mention: "page 31" or "on page 5"
-        const pageNum = parseInt(match[4]);
+        const pageNum = parseInt(match[8]);
         const fullMatch = match[0];
-        const prefix = fullMatch.substring(0, fullMatch.lastIndexOf(match[4]));
+        const prefix = fullMatch.substring(0, fullMatch.lastIndexOf(match[8]));
 
         // Add the prefix text (e.g., "on page " or "page ")
         if (prefix) {
@@ -64,10 +85,10 @@ export default function Message({ message, onPageClick }) {
           <PageCitation
             key={`citation-${key++}`}
             pageNumber={pageNum}
-            onClick={(p) => onPageClick(p, message)}
+            documentName={null}
+            onClick={(p) => onPageClick(p, null, message)}
           />
         );
-
       }
 
       lastIndex = match.index + match[0].length;

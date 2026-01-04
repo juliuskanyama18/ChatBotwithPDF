@@ -33,9 +33,36 @@ const embeddingSchema = new mongoose.Schema({
         type: [Number],
         required: true
     },
+    // 🎯 PHASE 2: Character offset tracking for precise text highlighting
+    startOffset: {
+        type: Number,
+        required: false,
+        default: null
+    },
+    endOffset: {
+        type: Number,
+        required: false,
+        default: null
+    },
+    lineRange: {
+        from: {
+            type: Number,
+            required: false
+        },
+        to: {
+            type: Number,
+            required: false
+        }
+    },
+    // 🎯 PHASE 2: Enhanced metadata (table structure, etc.)
     metadata: {
         type: Map,
-        of: String
+        of: mongoose.Schema.Types.Mixed,  // Changed from String to Mixed for complex objects
+        // Can store:
+        // - documentType: 'pdf' | 'pptx' | 'docx'
+        // - citationType: 'page' | 'slide' | 'section'
+        // - tableStructure: { headers: [...], rowCount: N, columnCount: M, format: 'markdown'|'tab' }
+        // - length: chunk text length
     },
     createdAt: {
         type: Date,

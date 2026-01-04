@@ -53,6 +53,8 @@ export const documentsAPI = {
   delete: (id) => api.delete(`/api/documents/${id}`),
   getLatestConversation: (documentId) =>
     api.get(`/api/documents/${documentId}/latest-conversation`),
+  getFolderConversation: (folderId) =>
+    api.get(`/api/documents/folders/${folderId}/latest-conversation`),
 };
 
 // Chat API

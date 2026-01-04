@@ -1,6 +1,7 @@
 import { OpenAI } from 'openai';
 import mongoose from 'mongoose';
 import Embedding from '../models/Embedding.js';
+import { crossEncoderRerank, llmBasedRerank, hybridRerank } from './reranker.js';
 
 // Lazy initialization of OpenAI client
 let openaiClient = null;
@@ -80,28 +81,58 @@ export async function generateEmbeddingsBatch(texts) {
  */
 export async function storeEmbeddings(documentId, userId, chunks, embeddings, documentType = 'pdf') {
     try {
+        // Determine citation terminology based on document type
+        const citationType = documentType === 'pptx' ? 'slide' :
+                           documentType === 'docx' ? 'section' : 'page';
+
         const embeddingDocs = chunks.map((chunk, index) => {
-            // Detect chunk type based on content markers
-            let chunkType = 'text';
-            if (chunk.text.startsWith('[IMAGE DESCRIPTION')) {
-                chunkType = 'image';
-            } else if (chunk.text.startsWith('[TABLE - Page') || chunk.text.startsWith('| ')) {
-                chunkType = 'table';
+            // Use chunk type from chunk data if available, otherwise detect
+            let chunkType = chunk.chunkType || 'text';
+            if (!chunk.chunkType) {
+                // Fallback detection for backward compatibility
+                if (chunk.text.startsWith('[IMAGE DESCRIPTION')) {
+                    chunkType = 'image';
+                } else if (chunk.text.startsWith('[TABLE - Page') || chunk.text.startsWith('| ')) {
+                    chunkType = 'table';
+                }
             }
 
-            return {
+            // Build metadata object
+            const metadata = {
+                length: chunk.text.length.toString(),
+                documentType: documentType,
+                citationType: citationType,
+                pageType: chunk.pageType || citationType
+            };
+
+            // 🎯 PHASE 2: Add table structure to metadata if available
+            if (chunk.tableStructure) {
+                metadata.tableStructure = chunk.tableStructure;
+            }
+
+            const embeddingDoc = {
                 documentId,
                 userId,
                 chunkText: chunk.text,
                 chunkIndex: index,
-                pageNumber: Number(chunk.pageNumber) || 1, // Ensure it's always a Number
+                pageNumber: Number(chunk.pageNumber) || 1,
                 chunkType: chunkType,
                 embedding: embeddings[index],
-                metadata: {
-                    length: chunk.text.length.toString(),
-                    documentType: documentType // Store document type for proper citation format
-                }
+                metadata
             };
+
+            // 🎯 PHASE 2: Add character offsets if available
+            if (chunk.startOffset !== undefined && chunk.startOffset !== null) {
+                embeddingDoc.startOffset = chunk.startOffset;
+                embeddingDoc.endOffset = chunk.endOffset;
+            }
+
+            // 🎯 PHASE 2: Add line range if available
+            if (chunk.lineRange) {
+                embeddingDoc.lineRange = chunk.lineRange;
+            }
+
+            return embeddingDoc;
         });
 
         await Embedding.insertMany(embeddingDocs);
@@ -134,6 +165,110 @@ export function cosineSimilarity(a, b) {
     }
 
     return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+/**
+ * 🎯 PHASE 2: Maximal Marginal Relevance (MMR) algorithm
+ * Selects diverse chunks that are relevant to the query while avoiding redundancy
+ *
+ * @param {Array} chunks - Array of chunks with embeddings and similarity scores
+ * @param {Array} queryEmbedding - Query embedding vector
+ * @param {number} k - Number of chunks to select
+ * @param {number} lambda - Diversity parameter (0=max diversity, 1=max relevance)
+ * @returns {Array} Selected diverse chunks
+ */
+export function maximalMarginalRelevance(chunks, queryEmbedding, k = 5, lambda = 0.5) {
+    if (!chunks || chunks.length === 0) return [];
+    if (chunks.length <= k) return chunks;
+
+    const selected = [];
+    const candidates = [...chunks];
+
+    // Start with the most relevant chunk
+    const firstChunk = candidates.splice(0, 1)[0];
+    selected.push(firstChunk);
+
+    console.log(`   🎯 MMR: Starting with top chunk (similarity: ${firstChunk.similarity?.toFixed(3) || 'N/A'})`);
+
+    // Iteratively select chunks that balance relevance and diversity
+    while (selected.length < k && candidates.length > 0) {
+        let bestScore = -Infinity;
+        let bestIndex = -1;
+
+        for (let i = 0; i < candidates.length; i++) {
+            const candidate = candidates[i];
+
+            // Relevance: similarity to query
+            const relevance = candidate.similarity ||
+                cosineSimilarity(queryEmbedding, candidate.embedding);
+
+            // Diversity: maximum similarity to already selected chunks (penalty)
+            let maxSimilarity = 0;
+            for (const selectedChunk of selected) {
+                if (candidate.embedding && selectedChunk.embedding) {
+                    const sim = cosineSimilarity(candidate.embedding, selectedChunk.embedding);
+                    maxSimilarity = Math.max(maxSimilarity, sim);
+                }
+            }
+
+            // MMR score: balance relevance vs diversity
+            // Higher lambda = more weight on relevance
+            // Lower lambda = more weight on diversity
+            const mmrScore = lambda * relevance - (1 - lambda) * maxSimilarity;
+
+            // Use deterministic tie-breaking: if scores are very close, prefer earlier page/chunk
+            const scoreDiff = mmrScore - bestScore;
+            const isSignificantlyBetter = scoreDiff > 0.001; // Threshold for "significantly better"
+            const isTie = Math.abs(scoreDiff) <= 0.001;
+
+            if (isSignificantlyBetter) {
+                bestScore = mmrScore;
+                bestIndex = i;
+            } else if (isTie && bestIndex >= 0) {
+                // Tie-breaker: prefer earlier page, then earlier chunk index
+                const currentCandidate = candidates[i];
+                const currentBest = candidates[bestIndex];
+
+                if (currentCandidate.pageNumber < currentBest.pageNumber ||
+                    (currentCandidate.pageNumber === currentBest.pageNumber &&
+                     currentCandidate.chunkIndex < currentBest.chunkIndex)) {
+                    bestScore = mmrScore;
+                    bestIndex = i;
+                }
+            } else if (bestIndex < 0) {
+                // First candidate
+                bestScore = mmrScore;
+                bestIndex = i;
+            }
+        }
+
+        if (bestIndex >= 0) {
+            const selectedChunk = candidates.splice(bestIndex, 1)[0];
+            selected.push(selectedChunk);
+        } else {
+            break;  // No more valid candidates
+        }
+    }
+
+    console.log(`   ✅ MMR selected ${selected.length} diverse chunks (lambda=${lambda})`);
+
+    // Log diversity stats
+    if (selected.length > 1) {
+        let totalSimilarity = 0;
+        let count = 0;
+        for (let i = 0; i < selected.length; i++) {
+            for (let j = i + 1; j < selected.length; j++) {
+                if (selected[i].embedding && selected[j].embedding) {
+                    totalSimilarity += cosineSimilarity(selected[i].embedding, selected[j].embedding);
+                    count++;
+                }
+            }
+        }
+        const avgInterSimilarity = count > 0 ? totalSimilarity / count : 0;
+        console.log(`   📊 Average inter-chunk similarity: ${avgInterSimilarity.toFixed(3)} (lower = more diverse)`);
+    }
+
+    return selected;
 }
 
 /**
@@ -294,6 +429,74 @@ export async function deleteEmbeddings(documentId) {
  * @param {Array} chunks - Array of chunks with chunkType, chunkText, pageNumber, similarity
  * @returns {string} Formatted context string ready for GPT-4
  */
+/**
+ * 🎯 PHASE 1 IMPROVEMENT: Chunk Deduplication
+ * Remove duplicate or highly overlapping chunks to improve context quality
+ */
+function deduplicateChunks(chunks) {
+    if (!chunks || chunks.length === 0) return chunks;
+
+    const deduplicated = [];
+    const seen = new Set();
+
+    for (const chunk of chunks) {
+        const text = chunk.chunkText || '';
+
+        // Skip empty chunks
+        if (text.trim().length === 0) continue;
+
+        // Create signature: page + first 150 chars + last 50 chars
+        const start = text.slice(0, 150).trim();
+        const end = text.slice(-50).trim();
+        const signature = `${chunk.pageNumber}-${start}-${end}`;
+
+        // Check for exact duplicates
+        if (seen.has(signature)) {
+            console.log(`   🔄 Skipping exact duplicate: Page ${chunk.pageNumber}, Index ${chunk.chunkIndex}`);
+            continue;
+        }
+
+        // Check for high overlap with existing chunks from same page
+        let isOverlapping = false;
+        for (const existing of deduplicated) {
+            if (existing.pageNumber === chunk.pageNumber) {
+                const similarity = calculateJaccardSimilarity(existing.chunkText, chunk.chunkText);
+
+                if (similarity > 0.8) { // 80% overlap threshold
+                    console.log(`   🔄 Skipping overlapping chunk: Page ${chunk.pageNumber} (${(similarity * 100).toFixed(0)}% similar to another chunk)`);
+                    isOverlapping = true;
+                    break;
+                }
+            }
+        }
+
+        if (!isOverlapping) {
+            deduplicated.push(chunk);
+            seen.add(signature);
+        }
+    }
+
+    if (deduplicated.length < chunks.length) {
+        console.log(`   ✂️  Deduplication: ${chunks.length} → ${deduplicated.length} chunks (removed ${chunks.length - deduplicated.length} duplicates)`);
+    }
+
+    return deduplicated;
+}
+
+/**
+ * Calculate Jaccard similarity between two texts
+ * Used for detecting overlapping chunks
+ */
+function calculateJaccardSimilarity(text1, text2) {
+    const words1 = new Set(text1.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+    const words2 = new Set(text2.toLowerCase().split(/\s+/).filter(w => w.length > 2));
+
+    const intersection = new Set([...words1].filter(w => words2.has(w)));
+    const union = new Set([...words1, ...words2]);
+
+    return union.size > 0 ? intersection.size / union.size : 0;
+}
+
 export function buildContextFromChunks(chunks) {
     if (!chunks || chunks.length === 0) {
         return {
@@ -302,8 +505,11 @@ export function buildContextFromChunks(chunks) {
         };
     }
 
+    // 🎯 PHASE 1: Deduplicate chunks first
+    const dedupedChunks = deduplicateChunks(chunks);
+
     // Sort all chunks by similarity (highest first)
-    const sortedChunks = [...chunks].sort((a, b) => b.similarity - a.similarity);
+    const sortedChunks = [...dedupedChunks].sort((a, b) => b.similarity - a.similarity);
 
     // Separate by type
     const textChunks = sortedChunks.filter(c => (c.chunkType || 'text') === 'text');
@@ -329,8 +535,78 @@ export function buildContextFromChunks(chunks) {
 
     const contextString = formattedChunks.join('\n\n═══════════════════════════════════════\n\n');
 
-    // Log selection summary
+    // Log selection summary with page numbers
+    const pageNumbers = [...new Set(allSelected.map(c => c.pageNumber))].sort((a, b) => a - b);
     console.log(`   📝 Built context: ${selectedText.length} text + ${selectedTables.length} table + ${selectedImages.length} image chunks`);
+    console.log(`   📄 Pages in context: [${pageNumbers.join(', ')}]`);
+
+    return {
+        contextString,
+        selectedChunks: allSelected
+    };
+}
+
+/**
+ * Build context from multi-document chunks with document names
+ * Similar to buildContextFromChunks but includes document names for proper attribution
+ */
+export function buildContextFromChunksMultiDoc(chunks) {
+    if (!chunks || chunks.length === 0) {
+        return {
+            contextString: '[No relevant context found]',
+            selectedChunks: []
+        };
+    }
+
+    // 🎯 PHASE 1: Deduplicate chunks first
+    const dedupedChunks = deduplicateChunks(chunks);
+
+    // Sort all chunks by similarity (highest first)
+    const sortedChunks = [...dedupedChunks].sort((a, b) => b.similarity - a.similarity);
+
+    // Separate by type
+    const textChunks = sortedChunks.filter(c => (c.chunkType || 'text') === 'text');
+    const tableChunks = sortedChunks.filter(c => c.chunkType === 'table');
+    const imageChunks = sortedChunks.filter(c => c.chunkType === 'image');
+
+    // Apply type-specific limits
+    const selectedText = textChunks.slice(0, 4);
+    const selectedTables = tableChunks.slice(0, 2);
+    const selectedImages = imageChunks.slice(0, 2);
+
+    // Combine and sort by document name, then page number
+    const allSelected = [...selectedText, ...selectedTables, ...selectedImages];
+    allSelected.sort((a, b) => {
+        // Sort by document name first, then page number
+        if (a.documentName !== b.documentName) {
+            return a.documentName.localeCompare(b.documentName);
+        }
+        return (a.pageNumber || 0) - (b.pageNumber || 0);
+    });
+
+    // Format each chunk with document name and type markers
+    const formattedChunks = allSelected.map((chunk, idx) => {
+        const chunkType = (chunk.chunkType || 'text').toUpperCase();
+        const pageNum = chunk.pageNumber || 'Unknown';
+        const docName = chunk.documentName || 'Unknown Document';
+
+        return `[Context ${idx + 1} - ${chunkType} - ${docName} - Page ${pageNum}]\n${chunk.chunkText}`;
+    });
+
+    const contextString = formattedChunks.join('\n\n═══════════════════════════════════════\n\n');
+
+    // Log selection summary
+    const docCounts = {};
+    allSelected.forEach(c => {
+        const name = c.documentName || 'Unknown';
+        docCounts[name] = (docCounts[name] || 0) + 1;
+    });
+
+    const pageNumbers = [...new Set(allSelected.map(c => c.pageNumber))].sort((a, b) => a - b);
+
+    console.log(`   📝 Built multi-doc context: ${selectedText.length} text + ${selectedTables.length} table + ${selectedImages.length} image chunks`);
+    console.log(`   📚 Documents in context:`, docCounts);
+    console.log(`   📄 Pages in context: [${pageNumbers.join(', ')}]`);
 
     return {
         contextString,
@@ -559,6 +835,9 @@ export async function retrieveRelevantChunks({ question, documentId, k = 8, page
             console.log(`   📍 Page-specific query detected → Using relaxed thresholds for pages: ${pageFilter.pageNumbers.join(', ')}`);
         }
 
+        // Generate query embedding for MMR (needed later)
+        const queryEmbedding = await generateEmbedding(question);
+
         // Perform HYBRID search (vector + keyword) with higher k to get more candidates
         const allChunks = await hybridSearch(question, documentId, k, pageFilter);
 
@@ -566,6 +845,19 @@ export async function retrieveRelevantChunks({ question, documentId, k = 8, page
             console.log('   ⚠️  No chunks found in vector search');
             return [];
         }
+
+        // Sort chunks for deterministic ordering (by similarity desc, then page, then chunk index)
+        // This ensures consistent results when scores are very close
+        allChunks.sort((a, b) => {
+            const simDiff = (b.similarity || 0) - (a.similarity || 0);
+            if (Math.abs(simDiff) > 0.001) return simDiff; // Significantly different scores
+
+            // Tie-breaker: prefer earlier pages and chunks
+            if (a.pageNumber !== b.pageNumber) {
+                return a.pageNumber - b.pageNumber;
+            }
+            return (a.chunkIndex || 0) - (b.chunkIndex || 0);
+        });
 
         // Filter chunks by type-specific thresholds
         const filteredChunks = allChunks.filter(chunk => {
@@ -624,7 +916,45 @@ export async function retrieveRelevantChunks({ question, documentId, k = 8, page
         ).join(', ');
         console.log(`   📊 Chunk types: ${chunkSummary}`);
 
-        return filteredChunks;
+        // PHASE 2: Apply reranking to improve result quality
+        let finalChunks = filteredChunks;
+
+        // Only rerank if we have more chunks than k (otherwise already optimal)
+        if (filteredChunks.length > k) {
+            try {
+                // Use fast cross-encoder reranking by default
+                // For maximum accuracy, set useLLM: true (slower, costs more)
+                finalChunks = await hybridRerank(question, filteredChunks, k, {
+                    useLLM: false,     // Set to true for LLM-based reranking (more accurate but slower)
+                    llmTopK: 15        // If useLLM=true, refine top 15 candidates
+                });
+
+                console.log(`   🔄 Reranking applied: ${filteredChunks.length} → ${finalChunks.length} chunks`);
+            } catch (error) {
+                console.error('   ⚠️  Reranking failed, using original order:', error.message);
+                finalChunks = filteredChunks.slice(0, k);
+            }
+        }
+
+        // 🎯 PHASE 2: Apply MMR for diversity (DISABLED for consistency)
+        const useMMR = false;  // DISABLED: MMR causes inconsistent answers for factual queries
+        const mmrLambda = 0.9;  // Not used when MMR is disabled
+
+        if (useMMR && finalChunks.length > 1 && queryEmbedding) {
+            try {
+                const mmrChunks = maximalMarginalRelevance(
+                    finalChunks,
+                    queryEmbedding,
+                    Math.min(k, finalChunks.length),
+                    mmrLambda
+                );
+                finalChunks = mmrChunks;
+            } catch (error) {
+                console.error('   ⚠️  MMR failed, using reranked results:', error.message);
+            }
+        }
+
+        return finalChunks;
 
     } catch (error) {
         console.error('❌ Error in retrieveRelevantChunks:', error.message);

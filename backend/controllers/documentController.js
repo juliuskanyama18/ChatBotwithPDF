@@ -356,3 +356,52 @@ export async function getLatestConversation(req, res) {
         res.status(500).json({ error: 'Error fetching conversation' });
     }
 }
+
+/**
+ * Get latest conversation and messages for a folder
+ */
+export async function getFolderLatestConversation(req, res) {
+    try {
+        const { folderId } = req.params;
+
+        // Find latest conversation for this folder
+        const conversation = await Conversation.findOne({
+            folderId: folderId,
+            userId: req.user._id
+        }).sort({ updatedAt: -1 });
+
+        if (!conversation) {
+            return res.json({
+                success: true,
+                conversation: null,
+                messages: []
+            });
+        }
+
+        // Get messages for this conversation
+        const messages = await Message.find({
+            conversationId: conversation._id
+        }).sort({ createdAt: 1 });
+
+        res.json({
+            success: true,
+            conversation: {
+                _id: conversation._id,
+                title: conversation.title,
+                folderId: conversation.folderId
+            },
+            messages: messages.map(msg => ({
+                _id: msg._id,
+                role: msg.role,
+                content: msg.content,
+                pageReference: msg.pageReference,
+                sourceDocument: msg.sourceDocument,
+                createdAt: msg.createdAt
+            }))
+        });
+
+    } catch (error) {
+        console.error('Get folder conversation error:', error);
+        res.status(500).json({ error: 'Error fetching folder conversation' });
+    }
+}
