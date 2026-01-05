@@ -4,10 +4,19 @@ import { RecursiveCharacterTextSplitter, preprocessText, parseTableStructure, co
 import { generateEmbeddingsBatch, storeEmbeddings } from '../utils/embeddings.js';
 import { extractAndCaptionImages, cleanupImageFiles } from '../utils/imageExtractor.js';
 import { extractTextWithPageBoundaries } from '../utils/documentProcessor.js';
+import { smartChunk, getOptimalChunkingParams } from '../utils/pythonChunker.js';
 
 /**
  * Generate and store embeddings for a document (IMPROVED VERSION)
- * Now uses semantic chunking and correct page boundaries for all formats
+ * Now uses multi-strategy chunking (Python NLP) and correct page boundaries for all formats
+ *
+ * Features:
+ * - Multi-strategy chunking with document-type-specific algorithms (PDF, DOCX, PPTX)
+ * - Python NLP service with spaCy, NLTK, sentence-transformers
+ * - Automatic fallback to Node.js RecursiveCharacterTextSplitter if Python unavailable
+ * - Correct page/slide boundaries for all formats
+ * - Table structure detection and parsing
+ * - Image extraction and captioning (PDF only)
  */
 export async function generateDocumentEmbeddings(documentId, userId, rawText) {
     try {
@@ -37,12 +46,19 @@ export async function generateDocumentEmbeddings(documentId, userId, rawText) {
                 continue;
             }
 
-            // IMPROVEMENT 3: Use semantic chunking with format-aware parameters
+            // IMPROVEMENT 3: Use multi-strategy chunking with Python service (with fallback)
             const chunkParams = getChunkingParams(documentType);
             const splitter = new RecursiveCharacterTextSplitter(chunkParams);
 
-            // 🎯 PHASE 2: Use splitTextWithOffsets for character offset tracking
-            const pageChunksWithOffsets = splitter.splitTextWithOffsets(cleanedText);
+            // Try Python multi-strategy chunking first, fallback to Node.js if unavailable
+            let pageChunksWithOffsets;
+            try {
+                pageChunksWithOffsets = await smartChunk(cleanedText, documentType, splitter);
+            } catch (error) {
+                console.warn(`   ⚠️  Chunking error, using Node.js fallback: ${error.message}`);
+                pageChunksWithOffsets = splitter.splitTextWithOffsets(cleanedText);
+            }
+
             console.log(`   📄 ${pageData.pageType} ${pageData.pageNumber}: ${pageChunksWithOffsets.length} chunks`);
 
             // Add page metadata to each chunk
@@ -140,31 +156,37 @@ export async function generateDocumentEmbeddings(documentId, userId, rawText) {
 /**
  * Get optimal chunking parameters for each document type
  * Different formats need different chunking strategies
+ * These match the Python service's optimal parameters
  */
 function getChunkingParams(documentType) {
     switch (documentType) {
         case 'pdf':
             // PDFs: Standard academic/business documents
+            // Larger chunks to preserve context across paragraphs
             return {
-                chunkSize: 800,          // Increased from 500
-                chunkOverlap: 100,       // Increased from 50
+                chunkSize: 800,
+                chunkOverlap: 100,
+                separators: ['\n\n', '\n', '. ', '! ', '? ', ', ', ' ', '']
+            };
+
+        case 'docx':
+        case 'doc':
+            // DOCX: Word documents, often have shorter paragraphs
+            // Medium chunks to respect paragraph boundaries
+            return {
+                chunkSize: 700,
+                chunkOverlap: 80,
                 separators: ['\n\n', '\n', '. ', '! ', '? ', ', ', ' ', '']
             };
 
         case 'pptx':
-            // Slides: Shorter, more concise content
+        case 'ppt':
+            // PPTX: Presentations, slide-based structure
+            // Smaller chunks since slides are discrete units
             return {
                 chunkSize: 500,
-                chunkOverlap: 75,
+                chunkOverlap: 50,
                 separators: ['\n\n', '\n', '. ', '! ', '? ', ' ', '']
-            };
-
-        case 'docx':
-            // Documents: Can be very long, need larger chunks
-            return {
-                chunkSize: 1000,
-                chunkOverlap: 150,
-                separators: ['\n\n', '\n', '. ', '! ', '? ', ', ', ' ', '']
             };
 
         default:

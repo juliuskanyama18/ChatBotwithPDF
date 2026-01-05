@@ -19,6 +19,8 @@ from loguru import logger
 from typing import Dict, Any, List
 import traceback
 from table_extractor import extract_tables_from_pdf
+from multi_strategy_chunker import get_chunking_strategy
+from pydantic import BaseModel
 
 # Configure logging
 logger.add("document_service.log", rotation="10 MB", level="INFO")
@@ -886,6 +888,100 @@ async def comprehensive_ocr(file: UploadFile = File(...)) -> JSONResponse:
         raise HTTPException(
             status_code=500,
             detail=f"Failed to process file with OCR: {str(e)}"
+        )
+
+
+# Pydantic model for chunking request
+class ChunkRequest(BaseModel):
+    """Request model for chunking endpoint"""
+    text: str
+    file_type: str
+    chunk_size: int = 800
+    chunk_overlap: int = 100
+
+
+@app.post("/chunk")
+async def chunk_document(request: ChunkRequest) -> JSONResponse:
+    """
+    Multi-Strategy Document Chunking Endpoint
+
+    Uses document-type-specific chunking strategies for optimal results:
+    - PDF: Section-aware chunking with heading detection
+    - DOCX: Paragraph-based chunking with list preservation
+    - PPTX: Slide-based chunking with bullet point structure
+
+    Args:
+        request: ChunkRequest containing:
+            - text: Full document text to chunk
+            - file_type: Document type ('pdf', 'docx', 'pptx')
+            - chunk_size: Target chunk size in tokens (default: 800)
+            - chunk_overlap: Overlap between chunks in tokens (default: 100)
+
+    Returns:
+        - chunks: List of chunk objects with text, offsets, and metadata
+        - total_chunks: Number of chunks created
+        - strategy: Chunking strategy used
+        - success: Processing status
+    """
+    logger.info(f"Chunking request: file_type={request.file_type}, chunk_size={request.chunk_size}, text_length={len(request.text)}")
+
+    try:
+        # Validate input
+        if not request.text or not request.text.strip():
+            raise HTTPException(
+                status_code=400,
+                detail="Text cannot be empty"
+            )
+
+        if request.file_type.lower() not in ['pdf', 'docx', 'doc', 'pptx', 'ppt']:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type: {request.file_type}. Supported: pdf, docx, pptx"
+            )
+
+        # Get appropriate chunking strategy
+        strategy = get_chunking_strategy(
+            file_type=request.file_type,
+            chunk_size=request.chunk_size,
+            chunk_overlap=request.chunk_overlap
+        )
+
+        # Perform chunking
+        chunks = strategy.chunk(request.text)
+
+        if not chunks:
+            logger.warning(f"No chunks generated for {request.file_type} document")
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "chunks": [],
+                    "total_chunks": 0,
+                    "strategy": strategy.__class__.__name__,
+                    "success": True,
+                    "warning": "No chunks generated"
+                }
+            )
+
+        logger.info(f"Successfully created {len(chunks)} chunks using {strategy.__class__.__name__}")
+
+        return JSONResponse(
+            status_code=200,
+            content={
+                "chunks": chunks,
+                "total_chunks": len(chunks),
+                "strategy": strategy.__class__.__name__,
+                "file_type": request.file_type,
+                "success": True
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in chunking: {str(e)}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to chunk document: {str(e)}"
         )
 
 

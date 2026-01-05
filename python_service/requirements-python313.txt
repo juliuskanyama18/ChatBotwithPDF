@@ -15,10 +15,12 @@ pytesseract==0.3.13
 # PDF Processing (Alternative)
 PyPDF2==3.0.1
 
-# NLP Libraries for Multi-Strategy Chunking
-spacy==3.7.6
-nltk==3.9.1
-sentence-transformers==3.1.1
+# NLP Libraries for Multi-Strategy Chunking (Python 3.13 compatible versions)
+# Note: spaCy may not have pre-built wheels for Python 3.13 yet
+# Try installing from source or wait for official wheels
+nltk>=3.9.1
+# spacy>=3.7.6  # Commented out - install separately if needed
+# sentence-transformers>=3.1.1  # Commented out - requires PyTorch which may not support 3.13 yet
 
 # Utilities
 python-magic-bin==0.4.14  # For file type detection on Windows
