@@ -75,3 +75,19 @@
 .react-pdf__Page__canvas {
   @apply mx-auto rounded-lg;
 }
+
+/* Sliding loading bar animation (use absolute left to cross full container) */
+.loading-bar-slider {
+  position: absolute;
+  top: 0;
+  left: -40%;               /* start off-screen left */
+  width: 40%;               /* visual bar width */
+  height: 100%;
+  background: linear-gradient(90deg, rgba(255,255,255,0) 0%, rgba(14,165,233,0.95) 40%, rgba(14,165,233,0.6) 50%, rgba(14,165,233,0.95) 60%, rgba(255,255,255,0) 100%);
+  animation: slide-across 1.6s linear infinite;
+}
+
+@keyframes slide-across {
+  0%   { left: -40%; }
+  100% { left: 140%; } /* move fully past the right edge */
+}

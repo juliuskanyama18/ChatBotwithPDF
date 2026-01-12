@@ -49,6 +49,7 @@ export const documentsAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
+  getProgress: (id) => api.get(`/api/documents/${id}/progress`),
   update: (id, data) => api.put(`/api/documents/${id}`, data),
   delete: (id) => api.delete(`/api/documents/${id}`),
   getLatestConversation: (documentId) =>

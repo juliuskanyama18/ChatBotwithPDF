@@ -5,12 +5,17 @@ import pdf from 'pdf-parse';
 import Document from '../models/Document.js';
 import Conversation from '../models/Conversation.js';
 import Message from '../models/Message.js';
+import Embedding from '../models/Embedding.js';
 import { processDocument, isValidFileType, getSupportedExtensions } from '../utils/documentProcessor.js';
 import { processDocumentWithFallback } from '../utils/pythonServiceClient.js';
 import { deleteEmbeddings } from '../utils/embeddings.js';
+import { chunkText } from '../utils/textProcessing.js';
 
 const pdfDirectory = path.join(process.cwd(), 'pdfs');
 const pdfStore = {}; // Backward compatibility
+
+// In-memory progress map: documentId (string) -> { status, progress, expectedChunks }
+export const uploadProgressMap = new Map();
 
 /**
  * Detect PDF language
@@ -162,19 +167,66 @@ export async function uploadDocument(req, res, generateEmbeddings) {
             convertedPdfPath: convertedPdfPath
         });
 
-        // Generate embeddings in background
-        if (extractedText && extractedText.length > 50) {
-            generateEmbeddings(document._id, req.user._id, extractedText)
-                .then(() => {
-                    console.log(`✅ Embeddings generated for ${documentType.toUpperCase()} ${document._id}`);
-                })
-                .catch(error => {
-                    console.error(`❌ Error generating embeddings for ${document._id}:`, error);
-                });
-        } else {
-            console.log(`⚠️ No text extracted - skipping embeddings for ${document._id}`);
+        // --- NEW: prepare progress tracking using chunking estimate ---
+        let expectedChunks = 0;
+        try {
+            const chunks = chunkText(extractedText || '', 800, 100); // same chunking logic as embeddings
+            expectedChunks = Array.isArray(chunks) ? chunks.length : 0;
+        } catch (err) {
+            expectedChunks = 0;
         }
 
+        // Initialize progress state
+        const docIdStr = document._id.toString();
+        uploadProgressMap.set(docIdStr, {
+            status: expectedChunks > 0 ? 'processing' : 'ready',
+            progress: expectedChunks > 0 ? 0 : 100,
+            expectedChunks
+        });
+
+        // Generate embeddings in background (existing function)
+        if (extractedText && extractedText.length > 50 && expectedChunks > 0) {
+            const embeddingsPromise = generateEmbeddings(document._id, req.user._id, extractedText)
+                .then(() => {
+                    // Ensure final state set to ready (in case polling missed final count)
+                    uploadProgressMap.set(docIdStr, { status: 'ready', progress: 100, expectedChunks });
+                    console.log(`✅ Embedding generation finished for document ${docIdStr}`);
+                })
+                .catch(err => {
+                    console.error(`❌ Embedding generation error for ${docIdStr}:`, err);
+                    uploadProgressMap.set(docIdStr, { status: 'error', progress: 0, expectedChunks });
+                });
+
+            // Poll DB for number of stored embeddings and update progress map
+            const pollInterval = 1000; // ms
+            const intervalId = setInterval(async () => {
+                try {
+                    const count = await Embedding.countDocuments({ documentId: document._id });
+                    const pct = expectedChunks > 0 ? Math.min(100, Math.round((count / expectedChunks) * 100)) : 0;
+
+                    const current = uploadProgressMap.get(docIdStr) || {};
+                    // update only if changed
+                    if (current.progress !== pct || current.status !== 'processing') {
+                        uploadProgressMap.set(docIdStr, { status: pct >= 100 ? 'ready' : 'processing', progress: pct, expectedChunks });
+                    }
+
+                    if (pct >= 100) {
+                        clearInterval(intervalId);
+                    }
+                } catch (err) {
+                    console.error('Progress polling error:', err);
+                }
+            }, pollInterval);
+
+            // Also ensure interval cleared when embeddingsPromise resolves/rejects
+            embeddingsPromise.finally(() => clearInterval(intervalId));
+        } else {
+            // No embeddings to generate (empty text or zero expected chunks)
+            uploadProgressMap.set(docIdStr, { status: 'ready', progress: 100, expectedChunks });
+        }
+        // --- END NEW ---
+
+        // Respond with document info
         res.json({
             success: true,
             fileName: fileName,
@@ -403,5 +455,23 @@ export async function getFolderLatestConversation(req, res) {
     } catch (error) {
         console.error('Get folder conversation error:', error);
         res.status(500).json({ error: 'Error fetching folder conversation' });
+    }
+}
+
+/**
+ * Get document progress
+ */
+export async function getDocumentProgress(req, res) {
+    try {
+        const documentId = req.params.id;
+        // Ensure user owns document (basic check)
+        const doc = await Document.findOne({ _id: documentId, userId: req.user._id }).select('_id');
+        if (!doc) return res.status(404).json({ error: 'Document not found' });
+
+        const progress = uploadProgressMap.get(documentId) || { status: 'unknown', progress: 0, expectedChunks: 0 };
+        res.json({ success: true, progress });
+    } catch (err) {
+        console.error('Get progress error:', err);
+        res.status(500).json({ error: 'Failed to get progress' });
     }
 }

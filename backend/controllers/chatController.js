@@ -160,6 +160,44 @@ export async function generateResponse(req, res) {
         const { prompt, matchedSection, documentId, documentIds, folderId, conversationId } = req.body;
         console.log(`📝 Question: "${prompt.substring(0, 100)}..."`);
 
+        // ------------------ NEW: Detect page/slide references in user prompt ------------------
+        // Examples matched: "page 5", "slide 10", "page 5,6,7", "page 3-5", "on page 12"
+        let pageFilter = null;
+        try {
+            const pageRefPattern = /(?:page|slide)\s+(\d+(?:\s*-\s*\d+)?(?:\s*,\s*\d+)*)/gi;
+            let m;
+            const pages = new Set();
+
+            while ((m = pageRefPattern.exec(prompt)) !== null) {
+                const token = m[1].trim();
+                if (token.includes('-')) {
+                    const [startStr, endStr] = token.split('-').map(s => s.trim());
+                    const start = parseInt(startStr, 10);
+                    const end = parseInt(endStr, 10);
+                    if (!Number.isNaN(start) && !Number.isNaN(end) && end >= start) {
+                        for (let p = start; p <= end; p++) pages.add(p);
+                    }
+                } else if (token.includes(',')) {
+                    token.split(',').forEach(part => {
+                        const n = parseInt(part.trim(), 10);
+                        if (!Number.isNaN(n)) pages.add(n);
+                    });
+                } else {
+                    const n = parseInt(token, 10);
+                    if (!Number.isNaN(n)) pages.add(n);
+                }
+            }
+
+            if (pages.size > 0) {
+                pageFilter = { pageNumbers: Array.from(pages).sort((a,b) => a-b) };
+                console.log(`🔎 Page/slide request detected — pageFilter: ${JSON.stringify(pageFilter)}`);
+            }
+        } catch (err) {
+            console.warn('⚠️ Page detection failed, continuing without pageFilter', err);
+            pageFilter = null;
+        }
+        // -------------------------------------------------------------------------------------
+
         // MULTI-DOCUMENT MODE vs SINGLE DOCUMENT MODE
         const isMultiDocMode = documentIds && Array.isArray(documentIds) && documentIds.length > 0;
         const targetDocIds = isMultiDocMode ? documentIds : [documentId];
@@ -235,13 +273,13 @@ export async function generateResponse(req, res) {
             if (isMultiDocMode) {
                 console.log('\n🔍 Starting MULTI-DOCUMENT RAG retrieval...');
 
-                // Call retrieveRelevantChunks for EACH document in parallel
+                // MULTI-DOCUMENT retrieval: pass pageFilter into retrieveRelevantChunks
                 const allChunksPromises = targetDocIds.map(docId =>
                     retrieveRelevantChunks({
                         question: prompt,
                         documentId: docId,
-                        k: 10, // Get top 10 from each document
-                        pageFilter: null
+                        k: 10,
+                        pageFilter: pageFilter // <-- use detected pages if any
                     })
                 );
 
@@ -344,7 +382,7 @@ export async function generateResponse(req, res) {
                     question: prompt,
                     documentId: documentId,
                     k: 15,
-                    pageFilter: null
+                    pageFilter: pageFilter // <-- use detected pages if any
                 });
 
                 if (similarChunks && similarChunks.length > 0) {

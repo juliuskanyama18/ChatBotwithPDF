@@ -34,6 +34,7 @@ export default function UploadModal({ onClose, onSuccess }) {
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [dragActive, setDragActive] = useState(false);
+  const [progress, setProgress] = useState({ status: 'idle', progress: 0 });
 
   const handleDrag = (e) => {
     e.preventDefault();
@@ -51,19 +52,44 @@ export default function UploadModal({ onClose, onSuccess }) {
     setDragActive(false);
 
     const droppedFile = e.dataTransfer.files[0];
-    if (droppedFile && isValidFileType(droppedFile)) {
-      setFile(droppedFile);
-    } else {
-      toast.error('Unsupported file type. Please upload PDF, DOCX, PPTX, or Image files.');
+    if (droppedFile) {
+      // Accept PDF, DOCX, PPTX (including older .doc/.ppt fallbacks)
+      const allowedMimeTypes = [
+        'application/pdf',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation', // .pptx
+        'application/msword',     // .doc
+        'application/vnd.ms-powerpoint' // .ppt
+      ];
+      const allowedExtensions = ['.pdf', '.docx', '.pptx', '.doc', '.ppt'];
+
+      const fileExt = (droppedFile.name.match(/\.[^/.]+$/) || [''])[0].toLowerCase();
+      if (allowedMimeTypes.includes(droppedFile.type) || allowedExtensions.includes(fileExt)) {
+        setFile(droppedFile);
+      } else {
+        toast.error('Please upload a PDF, DOCX, or PPTX file');
+      }
     }
   };
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
-    if (selectedFile && isValidFileType(selectedFile)) {
-      setFile(selectedFile);
-    } else {
-      toast.error('Unsupported file type. Please upload PDF, DOCX, PPTX, or Image files.');
+    if (selectedFile) {
+      const allowedMimeTypes = [
+        'application/pdf',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'application/msword',
+        'application/vnd.ms-powerpoint'
+      ];
+      const allowedExtensions = ['.pdf', '.docx', '.pptx', '.doc', '.ppt'];
+      const fileExt = (selectedFile.name.match(/\.[^/.]+$/) || [''])[0].toLowerCase();
+
+      if (allowedMimeTypes.includes(selectedFile.type) || allowedExtensions.includes(fileExt)) {
+        setFile(selectedFile);
+      } else {
+        toast.error('Please upload a PDF, DOCX, or PPTX file');
+      }
     }
   };
 
@@ -71,27 +97,53 @@ export default function UploadModal({ onClose, onSuccess }) {
     if (!file) return;
 
     setUploading(true);
+    setProgress({ status: 'uploading', progress: 5 }); // initial
+
     const formData = new FormData();
-    formData.append('pdfFile', file); // Keep field name for backward compatibility
+    formData.append('pdfFile', file);
 
     try {
       const response = await documentsAPI.upload(formData);
+      // Upload succeeded, response contains document info
+      const documentId = response.data.documentId || response.data.document?._id;
 
-      // Use backend message or create a generic one
-      const message = response.data.message || 'Document uploaded successfully!';
-      toast.success(message);
+      // Poll progress endpoint until ready or error
+      if (documentId) {
+        setProgress({ status: 'processing', progress: 10 });
 
-      // Pass the document object to parent component
-      if (response.data.document) {
-        onSuccess(response.data.document);
+        const poll = setInterval(async () => {
+          try {
+            const pResp = await documentsAPI.getProgress(documentId);
+            const prog = pResp.data.progress || { status: 'processing', progress: 0 };
+            setProgress(prog);
+
+            if (prog.status === 'ready' || prog.progress >= 100) {
+              clearInterval(poll);
+              setUploading(false);
+              // Notify parent with the newly created document (if available)
+              onSuccess(response.data.document || { _id: documentId, fileName: response.data.fileName });
+              onClose();
+            } else if (prog.status === 'error') {
+              clearInterval(poll);
+              setUploading(false);
+              toast.error('Embedding generation failed. Check server logs.');
+            }
+          } catch (err) {
+            console.error('Progress poll error:', err);
+            // keep polling; you may implement retry/backoff if desired
+          }
+        }, 1000);
+      } else {
+        // No document id returned — fallback: treat as immediate success
+        setUploading(false);
+        onSuccess(response.data);
+        onClose();
       }
-
-      onClose();
     } catch (error) {
       console.error('Upload error:', error);
-      toast.error(error.response?.data?.error || 'Failed to upload document');
-    } finally {
+      toast.error(error.response?.data?.error || 'Failed to upload PDF');
       setUploading(false);
+      setProgress({ status: 'error', progress: 0 });
     }
   };
 
@@ -106,7 +158,7 @@ export default function UploadModal({ onClose, onSuccess }) {
         >
           {/* Header */}
           <div className="flex items-center justify-between mb-6">
-            <h2 className="text-2xl font-bold text-gray-900">Upload Document</h2>
+            <h2 className="text-2xl font-bold text-gray-900">Upload PDF</h2>
             <button
               onClick={onClose}
               className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
@@ -131,42 +183,56 @@ export default function UploadModal({ onClose, onSuccess }) {
               <div className="space-y-4">
                 <CheckCircle className="w-12 h-12 text-green-600 mx-auto" />
                 <div className="flex items-center justify-center space-x-2">
-                  {getFileIcon(file)}
+                  <File className="w-5 h-5 text-gray-600" />
                   <span className="text-gray-900 font-medium">{file.name}</span>
                 </div>
                 <p className="text-sm text-gray-600">
                   {(file.size / (1024 * 1024)).toFixed(2)} MB
                 </p>
-                <button
-                  onClick={() => setFile(null)}
-                  className="text-red-600 hover:text-red-700 text-sm font-medium"
-                >
-                  Remove
-                </button>
+
+                {/* --- CHANGED: Indeterminate sliding loading bar (no percentage) --- */}
+                {uploading && (
+                  <div className="w-full">
+                    <div className="h-3 bg-gray-200 rounded-full overflow-hidden relative">
+                      {/* Sliding gradient bar */}
+                      <div className="loading-bar-slider absolute inset-0" />
+                    </div>
+                    <p className="text-xs text-gray-600 mt-2">
+                      Processing document — this may take a minute. You will be notified when it's ready.
+                    </p>
+                  </div>
+                )}
+                {/* --- end change --- */}
+
+                {!uploading && (
+                  <button
+                    onClick={() => setFile(null)}
+                    className="text-red-600 hover:text-red-700 text-sm font-medium"
+                  >
+                    Remove
+                  </button>
+                )}
               </div>
             ) : (
               <div className="space-y-4">
                 <Upload className="w-12 h-12 text-gray-400 mx-auto" />
                 <div>
                   <p className="text-gray-900 font-medium mb-1">
-                    Drop your document here, or
+                    Drop your PDF here, or
                   </p>
                   <label className="text-primary-600 hover:text-primary-700 cursor-pointer font-medium">
                     browse files
                     <input
                       type="file"
-                      accept=".pdf,.docx,.pptx,.jpg,.jpeg,.png,.gif,.bmp,.tiff"
+                      accept=".pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.pptx,application/vnd.openxmlformats-officedocument.presentationml.presentation,.doc,application/msword,.ppt,application/vnd.ms-powerpoint"
                       onChange={handleFileChange}
                       className="hidden"
                     />
                   </label>
                 </div>
-                <div className="text-sm text-gray-600 space-y-1">
-                  <p className="font-medium">Supported formats:</p>
-                  <p>PDF, DOCX, PPTX, Images (JPG, PNG, GIF, BMP, TIFF)</p>
-                  <p className="text-xs mt-2">Maximum file size: 10MB</p>
-                  <p className="text-xs text-primary-600">📷 Images will be processed with OCR</p>
-                </div>
+                <p className="text-sm text-gray-600">
+                  Maximum file size: 10MB
+                </p>
               </div>
             )}
           </div>
@@ -188,7 +254,7 @@ export default function UploadModal({ onClose, onSuccess }) {
               {uploading ? (
                 <>
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  <span>Processing...</span>
+                  <span>Uploading...</span>
                 </>
               ) : (
                 <>

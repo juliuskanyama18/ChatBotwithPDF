@@ -617,7 +617,7 @@ const PDFViewer = forwardRef(function PDFViewer({ fileName }, ref) {
 
       {/* Floating Toolbar */}
       {numPages && (
-        <div className="absolute bottom-4 left-0 right-0 flex justify-center z-10 pointer-events-none">
+        <div className="absolute bottom-4 left-28 flex justify-center z-10 pointer-events-none">
           <div className="flex items-center p-1 rounded-lg shadow-[0_4px_12px_rgba(0,0,0,0.20)] border border-gray-300 bg-[rgba(249,249,251,0.90)] backdrop-blur-[6px] max-w-[calc(100%-8px)] pointer-events-auto text-gray-600 text-sm">
             {/* Zoom Out */}
             <button

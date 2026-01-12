@@ -11,7 +11,8 @@ import {
     deleteDocument,
     getDocumentConversations,
     getLatestConversation,
-    getFolderLatestConversation
+    getFolderLatestConversation,
+    getDocumentProgress
 } from '../controllers/documentController.js';
 import { generateDocumentEmbeddings } from '../services/embeddingService.js';
 
@@ -61,5 +62,8 @@ router.get('/:documentId/latest-conversation', protect, getLatestConversation);
 
 // Get latest conversation for a folder
 router.get('/folders/:folderId/latest-conversation', protect, getFolderLatestConversation);
+
+// Get progress for a document (upload/embedding progress)
+router.get('/:id/progress', protect, getDocumentProgress);
 
 export default router;
