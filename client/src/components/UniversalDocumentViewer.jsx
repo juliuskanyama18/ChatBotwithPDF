@@ -3,7 +3,7 @@ import { Image as ImageIcon, AlertCircle, Loader } from 'lucide-react';
 import PDFViewer from './PDFViewer';
 import DocxViewer from './DocxViewer';
 import PptxViewer from './PptxViewer';
-import { documentsAPI } from '../services/api';
+import { documentsAPI, API_URL } from '../services/api';
 
 const UniversalDocumentViewer = forwardRef(function UniversalDocumentViewer({ documentId, fileName, originalName }, ref) {
   const [document, setDocument] = useState(null);
@@ -83,7 +83,7 @@ const UniversalDocumentViewer = forwardRef(function UniversalDocumentViewer({ do
           <div className="flex-1 overflow-auto p-6 bg-gray-800">
             <div className="max-w-4xl mx-auto">
               <img
-                src={`/pdfs/${fileName}`}
+                src={`${API_URL}/pdfs/${fileName}`}
                 alt={originalName || fileName}
                 className="max-w-full h-auto rounded-lg shadow-2xl mx-auto bg-white"
                 onError={(e) => {

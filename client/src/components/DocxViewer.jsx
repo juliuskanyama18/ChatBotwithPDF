@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useImperativeHandle, forwardRef } from 'react';
 import { renderAsync } from 'docx-preview';
 import { Loader, AlertCircle, Minus, Plus, RotateCcw, Search, X, ChevronUp, ChevronDown } from 'lucide-react';
+import { API_URL } from '../services/api';
 
 const DocxViewer = forwardRef(function DocxViewer({ fileName }, ref) {
   const containerRef = useRef(null);
@@ -115,7 +116,7 @@ const DocxViewer = forwardRef(function DocxViewer({ fileName }, ref) {
       setError(null);
 
       // Fetch the DOCX file as a blob
-      const response = await fetch(`/pdfs/${fileName}`);
+      const response = await fetch(`${API_URL}/pdfs/${fileName}`);
       if (!response.ok) {
         throw new Error('Failed to load document');
       }

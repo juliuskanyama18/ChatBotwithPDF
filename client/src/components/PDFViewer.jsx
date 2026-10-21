@@ -1,6 +1,7 @@
 import { useState, useMemo, useImperativeHandle, forwardRef, useRef, useEffect } from 'react';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { AlertCircle, Minus, Plus, RotateCcw, Search, ChevronUp, ChevronDown, X } from 'lucide-react';
+import { API_URL } from '../services/api';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
@@ -117,7 +118,7 @@ const PDFViewer = forwardRef(function PDFViewer({ fileName }, ref) {
 
   function onDocumentLoadError(error) {
     console.error('❌ PDF load error:', error);
-    console.error('PDF URL:', pdfUrl);
+    console.error('PDF URL:', `${API_URL}/pdfs/${fileName}`);
     setLoadError(error.message || 'Failed to load PDF');
   }
 
@@ -528,7 +529,7 @@ const PDFViewer = forwardRef(function PDFViewer({ fileName }, ref) {
     <>
       <div ref={containerRef} className="h-full relative">
       <Document
-          file={`/pdfs/${fileName}`}
+          file={`${API_URL}/pdfs/${fileName}`}
           onLoadSuccess={onDocumentLoadSuccess}
           onLoadError={onDocumentLoadError}
           options={pdfOptions}

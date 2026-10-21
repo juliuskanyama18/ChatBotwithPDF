@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from 'react';
 import { FileText, Download, Loader, AlertCircle, Search, X, ChevronUp, ChevronDown } from 'lucide-react';
-import { documentsAPI } from '../services/api';
+import { documentsAPI, API_URL } from '../services/api';
 
 const PptxViewer = forwardRef(function PptxViewer({ fileName, originalName, documentId }, ref) {
   const [loading, setLoading] = useState(true);
@@ -488,7 +488,7 @@ const PptxViewer = forwardRef(function PptxViewer({ fileName, originalName, docu
             </div>
 
             <a
-              href={`/pdfs/${fileName}`}
+              href={`${API_URL}/pdfs/${fileName}`}
               download={originalName || fileName}
               className="flex-shrink-0 inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-orange-600 to-red-600 text-white rounded-lg hover:from-orange-700 hover:to-red-700 transition-all shadow-md hover:shadow-lg"
             >
