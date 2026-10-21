@@ -30,7 +30,9 @@ const __dirname = path.dirname(__filename);
 connectDB();
 
 const app = express();
-const port = 3600;
+// Hosts like Render/Railway/Fly assign a dynamic port via process.env.PORT and
+// route traffic to it -- hardcoding a port would make the app unreachable there.
+const port = process.env.PORT || 3600;
 
 // Create pdfs directory if it doesn't exist
 const pdfDirectory = path.join(__dirname, 'pdfs');

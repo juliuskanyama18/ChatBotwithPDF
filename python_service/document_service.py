@@ -988,13 +988,17 @@ async def chunk_document(request: ChunkRequest) -> JSONResponse:
 if __name__ == "__main__":
     import uvicorn
 
+    # Hosts like Render assign a dynamic port via the PORT env var and route
+    # traffic to it -- hardcoding a port would make the service unreachable there.
+    port = int(os.environ.get("PORT", 8000))
+
     logger.info("Starting Document Processing Service...")
-    logger.info("Service will be available at: http://localhost:8000")
-    logger.info("API docs available at: http://localhost:8000/docs")
+    logger.info(f"Service will be available at: http://localhost:{port}")
+    logger.info(f"API docs available at: http://localhost:{port}/docs")
 
     uvicorn.run(
         app,
         host="0.0.0.0",
-        port=8000,
+        port=port,
         log_level="info"
     )
