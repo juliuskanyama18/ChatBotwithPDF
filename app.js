@@ -2,6 +2,13 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+// Windows/Node sometimes fails to auto-detect the system DNS server and falls
+// back to an unreachable 127.0.0.1, breaking MongoDB Atlas SRV lookups
+// (querySrv ECONNREFUSED) even though the OS itself resolves DNS fine.
+// Forcing known-good resolvers here bypasses that broken auto-detection.
+import dns from 'dns';
+dns.setServers(['8.8.8.8', '8.8.4.4']);
+
 import express from 'express';
 import bodyParser from 'body-parser';
 import path from 'path';
@@ -32,8 +39,21 @@ if (!fs.existsSync(pdfDirectory)) {
 }
 
 // CORS configuration for React frontend
+// CORS_ORIGINS accepts a comma-separated list so dev (localhost:5173) and a
+// deployed frontend (e.g. a Vercel URL) can both be allowed at once.
+const allowedOrigins = (process.env.CORS_ORIGINS || 'http://localhost:5173')
+    .split(',')
+    .map(origin => origin.trim());
+
 app.use(cors({
-    origin: 'http://localhost:5173',
+    origin: (origin, callback) => {
+        // Allow non-browser requests (no Origin header) and any listed origin
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error(`CORS: origin ${origin} not allowed`));
+        }
+    },
     credentials: true
 }));
 

@@ -35,10 +35,14 @@ router.post('/register', async (req, res) => {
         const token = generateToken(user._id);
 
         // Set cookie
+        // sameSite:'none' is required (together with secure:true) for the cookie to be
+        // sent on cross-site requests, i.e. when the frontend and backend are on
+        // different domains (e.g. a Vercel frontend + a Render/Fly backend).
         res.cookie('token', token, {
             httpOnly: true,
             maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-            secure: process.env.NODE_ENV === 'production'
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
         });
 
         res.status(201).json({
@@ -85,7 +89,8 @@ router.post('/login', async (req, res) => {
         res.cookie('token', token, {
             httpOnly: true,
             maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
-            secure: process.env.NODE_ENV === 'production'
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
         });
 
         res.json({
@@ -105,9 +110,13 @@ router.post('/login', async (req, res) => {
 
 // Logout user
 router.post('/logout', (req, res) => {
+    // Must match the attributes used when the cookie was set, or the browser
+    // won't recognize this as clearing the same cookie.
     res.cookie('token', '', {
         httpOnly: true,
-        expires: new Date(0)
+        expires: new Date(0),
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
     });
 
     res.json({ success: true, message: 'Logged out successfully' });

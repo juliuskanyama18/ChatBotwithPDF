@@ -1,0 +1,601 @@
+<title>ChatBot with PDF</title>
+<style>
+  :root {
+    --ink: #1c1f26;
+    --ink-soft: #3a3d44;
+    --muted: #6b6a63;
+    --paper: #fafaf7;
+    --paper-raised: #f0efe9;
+    --paper-sunken: #e9e7e0;
+    --rule: #dcdad3;
+    --blueprint: #2e5c8a;
+    --blueprint-deep: #1b3a5c;
+    --blueprint-tint: #e7edf3;
+    --accent-contrast: #ffffff;
+    --shadow: none;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #e8e6df;
+      --ink-soft: #c7c5bc;
+      --muted: #9a988f;
+      --paper: #14161b;
+      --paper-raised: #1d2027;
+      --paper-sunken: #23262e;
+      --rule: #2b2e36;
+      --blueprint: #7fb0e0;
+      --blueprint-deep: #a9cdef;
+      --blueprint-tint: #1c2a3a;
+      --accent-contrast: #0d1117;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ink: #e8e6df;
+    --ink-soft: #c7c5bc;
+    --muted: #9a988f;
+    --paper: #14161b;
+    --paper-raised: #1d2027;
+    --paper-sunken: #23262e;
+    --rule: #2b2e36;
+    --blueprint: #7fb0e0;
+    --blueprint-deep: #a9cdef;
+    --blueprint-tint: #1c2a3a;
+    --accent-contrast: #0d1117;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Serif", Georgia, "Times New Roman", serif;
+    font-size: 16px;
+    line-height: 1.62;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .sheet {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 56px 28px 80px;
+  }
+
+  h1, h2, h3 {
+    text-wrap: balance;
+    font-weight: 700;
+    color: var(--ink);
+  }
+
+  .eyebrow {
+    font-family: "IBM Plex Sans", -apple-system, "Segoe UI", sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--blueprint);
+  }
+
+  h1.title {
+    font-size: 36px;
+    line-height: 1.15;
+    margin: 10px 0 4px;
+  }
+
+  .subtitle {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: 16px;
+    color: var(--ink-soft);
+    margin: 0 0 28px;
+  }
+
+  .doc-control {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1px;
+    background: var(--rule);
+    border: 1px solid var(--rule);
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: 13.5px;
+  }
+
+  .doc-control div {
+    background: var(--paper-raised);
+    padding: 10px 14px;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .doc-control dt {
+    color: var(--muted);
+    font-weight: 500;
+  }
+
+  .doc-control dd {
+    margin: 0;
+    font-weight: 600;
+    text-align: right;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12.5px;
+  }
+
+  .top-rule {
+    height: 3px;
+    background: var(--blueprint);
+    margin: 32px 0 40px;
+  }
+
+  section {
+    margin-bottom: 42px;
+    break-inside: avoid-page;
+  }
+
+  .heading-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    border-bottom: 1px solid var(--rule);
+    padding-bottom: 8px;
+    margin-bottom: 16px;
+  }
+
+  .sec-num {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--blueprint);
+    min-width: 22px;
+  }
+
+  h2.sec-title {
+    font-size: 21px;
+    margin: 0;
+  }
+
+  h3.sub-title {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--blueprint-deep);
+    margin: 22px 0 10px;
+  }
+
+  p { margin: 0 0 12px; max-width: 66ch; }
+  section > p:last-child { margin-bottom: 0; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+  }
+
+  .col-block h4 {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    margin: 0 0 10px;
+  }
+
+  .col-block.in h4 { color: var(--blueprint-deep); }
+  .col-block.out h4 { color: var(--muted); }
+
+  ul.plain {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  ul.plain li {
+    position: relative;
+    padding-left: 16px;
+    margin-bottom: 9px;
+    font-size: 14.5px;
+    line-height: 1.5;
+  }
+
+  .col-block.in ul.plain li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 8px;
+    width: 6px;
+    height: 6px;
+    background: var(--blueprint);
+  }
+
+  .col-block.out ul.plain li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 8px;
+    width: 6px;
+    height: 6px;
+    border: 1px solid var(--muted);
+    background: transparent;
+  }
+
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0;
+    margin: 16px 0 20px;
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12.5px;
+  }
+
+  .flow .step {
+    background: var(--paper-raised);
+    border: 1px solid var(--rule);
+    padding: 8px 12px;
+    color: var(--ink-soft);
+  }
+
+  .flow .arrow {
+    color: var(--blueprint);
+    padding: 0 6px;
+    font-size: 14px;
+  }
+
+  .flow .step.opt {
+    border-style: dashed;
+    color: var(--muted);
+  }
+
+  table.stack {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: 13.5px;
+    margin: 4px 0 8px;
+  }
+
+  table.stack th {
+    text-align: left;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+    border-bottom: 1px solid var(--rule);
+    padding: 6px 10px 8px 0;
+  }
+
+  table.stack td {
+    padding: 8px 10px 8px 0;
+    border-bottom: 1px solid var(--rule);
+    vertical-align: top;
+  }
+
+  table.stack td.tech {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12.5px;
+    color: var(--blueprint-deep);
+    white-space: nowrap;
+  }
+
+  .reqs {
+    display: grid;
+    grid-template-columns: 52px 1fr;
+    row-gap: 10px;
+    column-gap: 12px;
+  }
+
+  .reqs .id {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--blueprint);
+    padding-top: 1px;
+  }
+
+  .reqs .stmt {
+    font-size: 14.5px;
+    line-height: 1.5;
+  }
+
+  .steps {
+    counter-reset: step;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .steps li {
+    counter-increment: step;
+    position: relative;
+    padding: 0 0 16px 40px;
+    border-left: 1px solid var(--rule);
+    margin-left: 13px;
+    font-size: 14.5px;
+  }
+
+  .steps li:last-child { border-left-color: transparent; padding-bottom: 0; }
+
+  .steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: -13px;
+    top: -2px;
+    width: 25px;
+    height: 25px;
+    background: var(--paper);
+    border: 1px solid var(--blueprint);
+    color: var(--blueprint);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 12px;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .steps strong { color: var(--ink); }
+
+  .manual-block {
+    background: var(--blueprint-tint);
+    border: 1px solid var(--rule);
+    padding: 24px 24px 6px;
+  }
+
+  .manual-block .heading-row { border-bottom-color: var(--rule); }
+
+  .manual-steps {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .manual-steps li {
+    display: grid;
+    grid-template-columns: 24px 1fr;
+    gap: 10px;
+    margin-bottom: 14px;
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: 14.5px;
+    line-height: 1.55;
+  }
+
+  .manual-steps .num {
+    font-weight: 700;
+    color: var(--blueprint-deep);
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 13px;
+  }
+
+  .manual-steps .body { display: block; }
+
+  .note {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: 12.5px;
+    color: var(--muted);
+    border-top: 1px dashed var(--rule);
+    margin-top: 18px;
+    padding-top: 12px;
+  }
+
+  footer {
+    margin-top: 60px;
+    padding-top: 16px;
+    border-top: 1px solid var(--rule);
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: 11.5px;
+    color: var(--muted);
+    display: flex;
+    justify-content: space-between;
+  }
+
+  @media (max-width: 620px) {
+    .two-col { grid-template-columns: 1fr; }
+    .doc-control { grid-template-columns: 1fr; }
+    h1.title { font-size: 28px; }
+  }
+
+  @media print {
+    :root {
+      --ink: #1c1f26;
+      --ink-soft: #3a3d44;
+      --muted: #55534b;
+      --paper: #ffffff;
+      --paper-raised: #f2f1ec;
+      --paper-sunken: #ececec;
+      --rule: #c9c7bf;
+      --blueprint: #24507a;
+      --blueprint-deep: #16334f;
+      --blueprint-tint: #eef2f6;
+    }
+    body { background: #fff; }
+    .sheet { max-width: 100%; padding: 0 6px; }
+    section { break-inside: avoid; }
+    a { color: inherit; text-decoration: none; }
+  }
+</style>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Serif:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<div class="sheet">
+
+  <div class="eyebrow">System Specification &amp; User Manual</div>
+  <h1 class="title">ChatBot with PDF</h1>
+  <p class="subtitle">Retrieval-Augmented document question-answering system — technical specification and end-user guide.</p>
+
+  <dl class="doc-control">
+    <div><dt>Prepared by</dt><dd>Julius Godwin Kanyama</dd></div>
+    <div><dt>Document status</dt><dd>v1.0 — Final</dd></div>
+    <div><dt>Date</dt><dd>07 September 2026</dd></div>
+    <div><dt>Classification</dt><dd>Academic / Portfolio</dd></div>
+    <div><dt>Project origin</dt><dd>ISE492 Graduation Project</dd></div>
+    <div><dt>Deployment status</dt><dd>Local / Non-Production</dd></div>
+  </dl>
+
+  <div class="top-rule"></div>
+
+  <section id="intro">
+    <div class="heading-row"><span class="sec-num">1</span><h2 class="sec-title">Introduction &amp; Purpose</h2></div>
+    <p>ChatBot with PDF is a document question-answering system that allows a user to upload a document and receive natural-language answers to questions about its contents, generated using Retrieval-Augmented Generation (RAG) over the document's own text rather than a general-purpose model response. Answers are returned together with a citation to the specific page or slide the information was drawn from.</p>
+    <p>The system was developed as an academic project (ISE492 graduation project) and is presented here as a supporting technical artifact demonstrating applied work in natural-language processing, information retrieval, and full-stack system design. It is intended for a single end user — a student, researcher, or professional — who needs to query a document's contents without reading it in full, and is not, in its current form, a hardened multi-tenant production service.</p>
+  </section>
+
+  <section id="scope">
+    <div class="heading-row"><span class="sec-num">2</span><h2 class="sec-title">Scope</h2></div>
+    <div class="two-col">
+      <div class="col-block in">
+        <h4>In Scope</h4>
+        <ul class="plain">
+          <li>Upload and processing of PDF, DOCX, and PPTX documents, and of common image formats (JPG, PNG, GIF, BMP, TIFF) via OCR.</li>
+          <li>Per-user account registration and authentication.</li>
+          <li>Natural-language Q&amp;A over a single document, or jointly over multiple documents grouped into a folder.</li>
+          <li>Page/slide-level source citation, with automatic detection of unsupported citations.</li>
+          <li>A web interface for uploading, previewing, and chatting with a document.</li>
+          <li>Persistence of conversation history per document and per folder.</li>
+        </ul>
+      </div>
+      <div class="col-block out">
+        <h4>Out of Scope / Current Limitations</h4>
+        <ul class="plain">
+          <li>Production-grade infrastructure: no CI/CD, containerised deployment, or load testing has been performed.</li>
+          <li>The document-processing microservice is optional and runs as a separate local process; if it is not running, the system falls back automatically to a simpler Node.js-only pipeline.</li>
+          <li>Upload/embedding progress is tracked in memory on the server process and does not survive a restart.</li>
+          <li>PPTX-to-PDF preview conversion depends on LibreOffice being installed on the host machine.</li>
+          <li>OCR is applied automatically to image-file uploads; a scanned (image-only) PDF is detected but not yet routed through OCR automatically during standard upload.</li>
+          <li>No administrative or moderation interface is implemented.</li>
+          <li>The response model is fixed to OpenAI GPT-3.5-turbo and is not user-configurable.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <section id="architecture">
+    <div class="heading-row"><span class="sec-num">3</span><h2 class="sec-title">System Architecture Overview</h2></div>
+    <p>The system is a three-tier web application. A React single-page application communicates with an Express.js REST API over HTTP/JSON, authenticated by a JWT stored in an httpOnly cookie. The backend follows a Route → Controller → Service/Utility → Model layering, backed by MongoDB Atlas. <em>(The project also contains legacy EJS templates from an earlier iteration; these now serve only a static translation-file endpoint and are not part of the active user interface.)</em></p>
+
+    <div class="flow">
+      <span class="step">React client</span><span class="arrow">→</span>
+      <span class="step">Express API</span><span class="arrow">→</span>
+      <span class="step">OpenAI API</span>
+      <span class="arrow">·</span>
+      <span class="step">Express API</span><span class="arrow">→</span>
+      <span class="step opt">Python (FastAPI) service</span><span class="arrow">→</span>
+      <span class="step opt">Tesseract / LibreOffice</span>
+      <span class="arrow">·</span>
+      <span class="step">Express API</span><span class="arrow">↔</span>
+      <span class="step">MongoDB Atlas</span>
+    </div>
+
+    <p>The backend calls the OpenAI API directly for two purposes: generating vector embeddings at document-ingestion time, and generating the final answer at query time. It separately calls an optional Python (FastAPI) microservice, over local HTTP, for higher-quality document text extraction, OCR, and NLP-based chunking; the backend performs a health check before each use and transparently falls back to a built-in Node.js pipeline if that service is unreachable — the Python service is an accelerator, not a hard dependency.</p>
+
+    <h3 class="sub-title">Where OCR Fits</h3>
+    <p>OCR is performed by Tesseract in one of two places: inside the Python microservice (via the <code>pytesseract</code> binding) when that service is available and the upload is an image file, or inside the Node.js fallback path (via <code>tesseract.js</code>) when the microservice is not running. In both cases the OCR output is plain text that is fed into the same downstream chunking and embedding pipeline used for text extracted directly from PDF, DOCX, or PPTX files.</p>
+
+    <h3 class="sub-title">Technology Summary</h3>
+    <table class="stack">
+      <tr><th>Layer</th><th>Technology</th></tr>
+      <tr><td>Frontend</td><td class="tech">React, Vite, Tailwind CSS</td></tr>
+      <tr><td>Backend API</td><td class="tech">Node.js, Express.js</td></tr>
+      <tr><td>Authentication</td><td class="tech">JWT (httpOnly cookie), bcrypt</td></tr>
+      <tr><td>Database</td><td class="tech">MongoDB Atlas + Atlas Vector Search</td></tr>
+      <tr><td>Language model</td><td class="tech">OpenAI GPT-3.5-turbo</td></tr>
+      <tr><td>Embedding model</td><td class="tech">OpenAI text-embedding-3-small</td></tr>
+      <tr><td>Document extraction (optional)</td><td class="tech">Python, FastAPI, pdfplumber, python-docx, python-pptx</td></tr>
+      <tr><td>OCR</td><td class="tech">Tesseract (pytesseract / tesseract.js)</td></tr>
+      <tr><td>PPTX preview conversion</td><td class="tech">LibreOffice (headless)</td></tr>
+    </table>
+  </section>
+
+  <section id="requirements">
+    <div class="heading-row"><span class="sec-num">4</span><h2 class="sec-title">Functional Requirements</h2></div>
+    <div class="reqs">
+      <div class="id">FR-01</div><div class="stmt">The system shall allow a user to register an account and authenticate using an email address and password.</div>
+      <div class="id">FR-02</div><div class="stmt">The system shall restrict access to uploaded documents and conversations to the account that owns them.</div>
+      <div class="id">FR-03</div><div class="stmt">The system shall allow an authenticated user to upload a document in PDF, DOCX, PPTX, or a common image format (JPG, PNG, GIF, BMP, TIFF).</div>
+      <div class="id">FR-04</div><div class="stmt">The system shall extract the textual content of an uploaded document, applying OCR when the input is an image file.</div>
+      <div class="id">FR-05</div><div class="stmt">The system shall divide extracted text into overlapping chunks, using a chunk size and overlap specific to the document type, prior to embedding.</div>
+      <div class="id">FR-06</div><div class="stmt">The system shall generate a vector embedding for each chunk using the OpenAI text-embedding-3-small model and store it, with its source page/slide number, in MongoDB Atlas.</div>
+      <div class="id">FR-07</div><div class="stmt">The system shall detect tabular content, parse it into a structured representation, and store it as a distinct, separately retrievable chunk type.</div>
+      <div class="id">FR-08</div><div class="stmt">The system shall extract images embedded in PDF documents and generate a descriptive caption for each, stored as a distinct, retrievable chunk type.</div>
+      <div class="id">FR-09</div><div class="stmt">The system shall accept a natural-language question and retrieve the chunks most relevant to it using a combination of vector similarity search and keyword search.</div>
+      <div class="id">FR-10</div><div class="stmt">The system shall construct a context-augmented prompt from the retrieved chunks and submit it, with the user's question, to the OpenAI Chat Completions API to generate an answer.</div>
+      <div class="id">FR-11</div><div class="stmt">The system shall return each answer with a citation to its source page(s) or slide(s), and shall verify that every citation corresponds to a chunk actually retrieved for that query.</div>
+      <div class="id">FR-12</div><div class="stmt">The system shall allow a question to span multiple documents grouped into one folder, attributing each cited fact to its source document.</div>
+      <div class="id">FR-13</div><div class="stmt">The system shall report upload and embedding-generation progress to the client while a document is being processed.</div>
+      <div class="id">FR-14</div><div class="stmt">The system shall persist conversation and message history per document or folder so a user may resume a prior session.</div>
+      <div class="id">FR-15</div><div class="stmt">The system shall present an in-browser preview of the uploaded document, appropriate to its format, alongside the chat interface.</div>
+    </div>
+  </section>
+
+  <section id="data-model">
+    <div class="heading-row"><span class="sec-num">5</span><h2 class="sec-title">Data &amp; Retrieval Model</h2></div>
+
+    <h3 class="sub-title">Chunking</h3>
+    <p>Extracted text is first divided at page boundaries (per-page for PDF; per-slide for PPTX, using slide markers; ~500-word logical sections for DOCX, which has no native page concept). Within each page/slide, text is split into overlapping chunks using a recursive, separator-priority splitter, with chunk size and overlap set per document type: <strong>PDF — 800 tokens / 100 overlap</strong>, <strong>DOCX — 700 / 80</strong>, <strong>PPTX — 500 / 50</strong> (tokens approximated at ~4 characters each). Where the Python microservice is available, chunking instead uses a document-type-specific NLP strategy (spaCy/NLTK, e.g. heading- and section-aware splitting for PDF); the Node.js splitter above is the automatic fallback.</p>
+
+    <h3 class="sub-title">Embedding</h3>
+    <p>Each chunk is embedded with OpenAI's <strong>text-embedding-3-small</strong> model (1536-dimensional vectors), generated in batches. Every stored embedding record carries its source page/slide number, a chunk type (<code>text</code>, <code>table</code>, or <code>image</code>), and character-offset metadata used for highlighting.</p>
+
+    <h3 class="sub-title">Storage &amp; Retrieval</h3>
+    <p>Embeddings are stored as documents in a MongoDB Atlas collection. Retrieval at query time is <strong>hybrid</strong>: a native MongoDB Atlas <code>$vectorSearch</code> query (cosine similarity over the Atlas vector index) runs alongside a MongoDB text-index keyword search, and the two rankings are merged by Reciprocal Rank Fusion. If Atlas Vector Search is not available, the system falls back to computing cosine similarity in application code over the document's stored embeddings. Candidates are then filtered by a minimum similarity threshold (lower for table/image chunks and for page-specific queries), deduplicated, and optionally reranked before a bounded set of chunks (up to 4 text, 2 table, 2 image) is assembled into the context sent to the language model.</p>
+
+    <div class="flow">
+      <span class="step">Question</span><span class="arrow">→</span>
+      <span class="step">Vector search (Atlas)</span>
+      <span class="arrow">+</span>
+      <span class="step">Keyword search</span>
+      <span class="arrow">→</span>
+      <span class="step">RRF merge</span><span class="arrow">→</span>
+      <span class="step">Threshold filter</span><span class="arrow">→</span>
+      <span class="step">Rerank</span><span class="arrow">→</span>
+      <span class="step">Context build</span><span class="arrow">→</span>
+      <span class="step">GPT-3.5-turbo</span>
+    </div>
+  </section>
+
+  <section id="workflow">
+    <div class="heading-row"><span class="sec-num">6</span><h2 class="sec-title">Core User Workflow</h2></div>
+    <ol class="steps">
+      <li><strong>Sign in.</strong> The user registers or logs in; a JWT session cookie is issued.</li>
+      <li><strong>Upload.</strong> The user uploads a PDF, DOCX, PPTX, or image file from the workspace.</li>
+      <li><strong>Processing.</strong> Text is extracted (with OCR if the file is an image), then chunked and embedded in the background; a progress indicator is shown while this runs.</li>
+      <li><strong>Preview.</strong> The document is rendered in an in-browser viewer appropriate to its format as soon as it is available.</li>
+      <li><strong>Ask.</strong> The user types a natural-language question in the chat panel.</li>
+      <li><strong>Retrieve &amp; answer.</strong> The system retrieves the most relevant chunks, builds a context-augmented prompt, and returns an answer with page/slide citations.</li>
+      <li><strong>Verify.</strong> The user may click a citation to jump directly to the corresponding page or slide in the viewer.</li>
+      <li><strong>Resume.</strong> The conversation is saved; the user can return later and continue from where they left off.</li>
+    </ol>
+  </section>
+
+  <section id="testing">
+    <div class="heading-row"><span class="sec-num">7</span><h2 class="sec-title">Testing &amp; Quality Assurance Notes</h2></div>
+    <p>The system was validated through manual, developer-led testing during development. This consisted of uploading representative PDF, DOCX, PPTX, and image documents; asking a range of natural-language questions against them, including page-specific questions and questions with no answer present in the document; and manually confirming that responses were accurate, correctly cited, and that the citation-verification step correctly flagged citations that did not match the retrieved context. No automated test suite, load testing, or formal QA process was applied — testing was informal and exploratory, consistent with the project's scope as an academic and portfolio system rather than a production deployment.</p>
+  </section>
+
+  <section id="manual">
+    <div class="heading-row"><span class="sec-num">8</span><h2 class="sec-title">User Manual</h2></div>
+    <div class="manual-block">
+      <ol class="manual-steps">
+        <li><span class="num">1.</span><span class="body"><strong>Create an account or sign in.</strong> Open the application and register with an email address and password, or log in if you already have an account.</span></li>
+        <li><span class="num">2.</span><span class="body"><strong>Upload a document.</strong> From your workspace, choose Upload and select a PDF, Word, or PowerPoint file, or an image (photo of a page, scanned form, etc.).</span></li>
+        <li><span class="num">3.</span><span class="body"><strong>Wait for processing.</strong> A progress indicator shows while the document's text is being read and prepared for search. Larger documents take longer.</span></li>
+        <li><span class="num">4.</span><span class="body"><strong>Ask your question.</strong> Once processing is complete, type your question in plain language in the chat panel — for example, "What does section 4 say about eligibility?" or "Summarise page 12."</span></li>
+        <li><span class="num">5.</span><span class="body"><strong>Read the answer.</strong> The reply appears with a reference to the page or slide it came from, shown in brackets, e.g. <code>[Page 12]</code>.</span></li>
+        <li><span class="num">6.</span><span class="body"><strong>Check the source.</strong> Click a page/slide citation to jump straight to that location in the document preview alongside the chat.</span></li>
+        <li><span class="num">7.</span><span class="body"><strong>Ask follow-up questions.</strong> The conversation keeps its history, so you can ask follow-up questions without repeating context.</span></li>
+        <li><span class="num">8.</span><span class="body"><strong>Multiple documents.</strong> To ask a question across several related documents at once, group them into a folder first, then ask your question from the folder view.</span></li>
+        <li><span class="num">9.</span><span class="body"><strong>Come back later.</strong> Your documents and conversations remain in your account; open the workspace again to continue where you left off.</span></li>
+      </ol>
+      <p class="note">Note: processing speed and OCR quality depend on document size and image clarity. If the optional document-processing service is offline, uploads still work, using a simpler built-in text extraction method.</p>
+    </div>
+  </section>
+
+  <footer>
+    <span>ChatBot with PDF — System Specification &amp; User Manual</span>
+    <span>v1.0 · 07 September 2026</span>
+  </footer>
+
+</div>
